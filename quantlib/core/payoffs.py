@@ -48,18 +48,18 @@ class PayoffFunction(ABC):
 
 class CallPayoff(PayoffFunction):
     """Payoff function for a call option"""
-    def __init__(self, strike_price):
-        self.strike_price = strike_price
+    def __init__(self, strike):
+        self.strike = strike
     def calculate_payoff(self, spot_prices):
         spot_prices = np.array(spot_prices)
-        return np.maximum(spot_prices - self.strike_price, 0)
+        return np.maximum(spot_prices - self.strike, 0)
 
 
 class PutPayoff(PayoffFunction):
     """Payoff function for a put option"""
-    def __init__(self, strike_price):
-        self.strike_price = strike_price
+    def __init__(self, strike):
+        self.strike = strike
     def calculate_payoff(self, spot_prices):
         spot_prices = np.array(spot_prices)
-        return np.maximum(self.strike_price - spot_prices, 0)
+        return np.maximum(self.strike - spot_prices, 0)
 
