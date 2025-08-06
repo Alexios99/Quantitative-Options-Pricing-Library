@@ -20,11 +20,14 @@ class PricingResult:
 
 @dataclass
 class GreeksResult:
-    delta: float
+    delta_call: float
+    delta_put: float
     gamma: float
-    theta: float
+    theta_call: float
+    theta_put: float
     vega: float
-    rho: float
+    rho_call: float
+    rho_put: float
 
 class PricingEngine(ABC):
     @abstractmethod
@@ -52,8 +55,29 @@ class BlackScholesEngine(PricingEngine):
         
     
     def greeks(self, contract: OptionContract) -> GreeksResult:
-        pass
-        # We'll tackle this next
+        d1, d2, nd1, nd2, n_neg_d1, n_neg_d2 = self._calculate_bs_components(contract)
+        delta_call = nd1
+        delta_put = nd1 - 1
+        gamma = norm.pdf(d1)/(contract.spot * contract.volatility * np.sqrt(contract.time_to_expiry))
+        vega = contract.spot * norm.pdf(d1) * np.sqrt(contract.time_to_expiry)
+        theta_call = ( -contract.spot * norm.pdf(d1) * contract.volatility / (2 * np.sqrt(contract.time_to_expiry)) )  - contract.risk_free_rate * contract.strike * np.exp(-contract.risk_free_rate * contract.time_to_expiry) * nd2
+        theta_put = ( -contract.spot * norm.pdf(d1) * contract.volatility / (2 * np.sqrt(contract.time_to_expiry)) )  + contract.risk_free_rate * contract.strike * np.exp(-contract.risk_free_rate * contract.time_to_expiry) * n_neg_d2
+        rho_call = contract.strike * contract.time_to_expiry * np.exp(-contract.risk_free_rate * contract.time_to_expiry) * nd2
+        rho_put = -contract.strike * contract.time_to_expiry * np.exp(-contract.risk_free_rate * contract.time_to_expiry) * n_neg_d2
+        return GreeksResult(
+            delta_call=delta_call,
+            delta_put=delta_put,
+            gamma=gamma,
+            theta_call=theta_call,
+            theta_put=theta_put,
+            vega=vega,
+            rho_call=rho_call,
+            rho_put=rho_put
+        )
+
+
+
+        
 
     def _calculate_bs_components(self, contract: OptionContract):
         self._validate_parameters(contract)
