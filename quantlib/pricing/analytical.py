@@ -10,6 +10,8 @@ from datetime import datetime
 class MethodUsed(Enum):
     BS = 'blackscholes'
     GREEKS = 'greeks'
+    BINOMIAL_TREE = 'binomial tree'
+    TRINOMIAL_TREE = 'trinomial_tree'  
 
 @dataclass
 class PricingResult:

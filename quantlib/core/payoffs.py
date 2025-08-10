@@ -39,8 +39,8 @@ class OptionContract:
             raise ValueError("Spot price must be positive")
         if self.strike <= 0:
             raise ValueError("Strike price must be positive")
-        if self.time_to_expiry <= 0:
-            raise ValueError("Time to expiry must be positive")
+        if self.time_to_expiry < 0:
+            raise ValueError("Time to expiry must be non-negative")
         if self.volatility < 0:
             raise ValueError("Volatility must be non-negative")
         
