@@ -1,18 +1,8 @@
-from enum import Enum
-from dataclasses import dataclass, field
-from typing import List
 from abc import ABC, abstractmethod
 import numpy as np
-import scipy
 from datetime import datetime
-from core.payoffs import OptionContract, OptionType, PayoffFunction, ExerciseStyle
+from core.payoffs import OptionContract, OptionType, ExerciseStyle
 from pricing.analytical import PricingEngine, PricingResult, GreeksResult, MethodUsed
-
-@dataclass
-class ProbResult:
-    p: float
-    u: float
-    d: float
 
 
 class TreeEngine(PricingEngine, ABC):
@@ -132,14 +122,141 @@ class BinomialTreeEngine(TreeEngine):
         if self.richardson == "off":
             return base_price
         if self.richardson == "on":
-            pN   = base_price
-            pNp1 = self._price_with_n(contract, self.n_steps + 1)
-            return 0.5 * (pN + pNp1)
+            price_n   = base_price
+            price_n_plus_1 = self._price_with_n(contract, self.n_steps + 1)
+            return 0.5 * (price_n + price_n_plus_1)
 
         # "auto" heuristic: enable when base error is likely larger
         # (modest N, wide diffusion, near-ATM)
         N = self.n_steps
         lam = contract.volatility * np.sqrt(max(contract.time_to_expiry, 0.0))
+        mny = abs(np.log(contract.spot / contract.strike)) if contract.spot > 0 and contract.strike > 0 else 1e9
+        use_rich = (N < 200) or (lam > 0.35) or (mny < 0.1)
+
+        if not use_rich:
+            return base_price
+
+        price_n   = base_price
+        price_n_plus_1 = self._price_with_n(contract, N + 1)
+        return 0.5 * (price_n + price_n_plus_1)
+    
+    def greeks(self, contract: OptionContract):
+        """Greeks calculation not implemented yet."""
+        raise NotImplementedError("Greeks calculation for trees not yet implemented")
+
+
+class TrinomialTreeEngine(TreeEngine):
+    def __init__(self, n_steps: int, richardson: str = "auto"):
+        super().__init__(n_steps)
+        self.richardson = richardson
+
+    @property
+    def method_used(self) -> MethodUsed:
+        return MethodUsed.TRINOMIAL_TREE
+    
+    def _calculate_probabilities(self, contract: OptionContract, n: int):
+        dt = contract.time_to_expiry / n
+        sig = contract.volatility
+        if sig <= 0:
+            raise ValueError("Volatility must be positive for trinomial tree")
+
+        # KR factors
+        u = np.exp(sig * np.sqrt(3.0 * dt))
+        d = 1.0 / u
+        m = 1.0
+
+        # risk-neutral drift (no dividends)
+        nu = contract.risk_free_rate - 0.5 * sig * sig
+
+        # KR probabilities
+        alpha = (nu * np.sqrt(dt)) / (sig * np.sqrt(3.0))
+        p_u = 1.0 / 6.0 + 0.5 * alpha
+        p_m = 2.0 / 3.0
+        p_d = 1.0 - p_u - p_m  # = 1/6 - 0.5*alpha
+
+        # small numerical tolerance
+        tol = 1e-12
+        if (p_u < -tol) or (p_d < -tol) or (p_m < -tol) or (p_u > 1 + tol) or (p_d > 1 + tol) or (p_m > 1 + tol):
+            raise ValueError("Probabilities for trinomial not between 0 and 1; try increasing n_steps")
+
+        # clamp tiny negatives/overshoots
+        p_u = min(max(p_u, 0.0), 1.0)
+        p_d = min(max(p_d, 0.0), 1.0)
+        p_m = max(0.0, 1.0 - p_u - p_d)
+
+        return p_u, p_d, p_m, u, d, m, dt
+
+    
+    def _build(self, S0: float, u: float, d: float, n: int) -> np.ndarray:
+        tree = np.zeros((n + 1, 2 * n + 1))
+        centre = n  # index of S0 at step 0
+        tree[0, centre] = S0
+
+        for i in range(1, n + 1):
+            for j in range(centre - i, centre + i + 1):
+                net_moves = j - centre
+                if net_moves >= 0:
+                    tree[i, j] = S0 * (u ** net_moves)
+                else:
+                    tree[i, j] = S0 * (d ** abs(net_moves))
+        return tree
+
+    def _rollback(self, stock: np.ndarray, contract: OptionContract, p_u: float, p_d: float, p_m: float, disc: float, n: int) -> float:
+        opt = np.zeros_like(stock)
+        centre = n  # middle index at step 0
+
+        # Terminal payoffs
+        j_min = centre - n
+        j_max = centre + n
+        for j in range(j_min, j_max + 1):
+            if contract.option == OptionType.CALL:
+                opt[n, j] = max(0.0, stock[n, j] - contract.strike)
+            else:
+                opt[n, j] = max(0.0, contract.strike - stock[n, j])
+
+        # Backward induction
+        for i in range(n - 1, -1, -1):
+            j_min = centre - i
+            j_max = centre + i
+            for j in range(j_min, j_max + 1):
+                cont = disc * (p_u * opt[i + 1, j + 1] + p_m * opt[i + 1, j] + p_d * opt[i + 1, j - 1])
+                if contract.style == ExerciseStyle.AMERICAN:
+                    intrinsic = (stock[i, j] - contract.strike) if contract.option == OptionType.CALL \
+                                else (contract.strike - stock[i, j])
+                    opt[i, j] = max(cont, max(0.0, intrinsic))
+                else:
+                    opt[i, j] = cont
+
+        return float(opt[0, centre])  # start at centre
+
+
+    # one-shot with a specific N
+    def _price_with_n(self, contract: OptionContract, n: int) -> float:
+        p_u, p_d, p_m, u, d, m, dt = self._calculate_probabilities(contract, n)
+        disc = np.exp(-contract.risk_free_rate * dt)
+        stock = self._build(contract.spot, u, d, n)
+        return self._rollback(stock, contract, p_u, p_d, p_m, disc, n)
+
+    def _price_impl(self, contract: OptionContract) -> float:
+        return self._price_with_n(contract, self.n_steps)
+
+    def _refine_price(self, contract: OptionContract, base_price: float) -> float:
+        # Only refine Europeans
+        if contract.style != ExerciseStyle.EUROPEAN:
+            return base_price
+
+        # Respect mode
+        if self.richardson == "off":
+            return base_price
+
+        if self.richardson == "on":
+            price_n   = base_price
+            price_n_plus_1 = self._price_with_n(contract, self.n_steps + 1)
+            return 0.5 * (price_n + price_n_plus_1)
+
+        # "auto": enable when grid error likely large: modest N, wide diffusion, near-ATM
+        N = self.n_steps
+        lam = contract.volatility * np.sqrt(max(contract.time_to_expiry, 0.0))  # σ√T
         mny = abs(np.log(contract.spot / contract.strike)) if contract.spot > 0 and contract.strike > 0 else 1e9
         use_rich = (N < 200) or (lam > 0.35) or (mny < 0.1)
 
@@ -153,3 +270,7 @@ class BinomialTreeEngine(TreeEngine):
     def greeks(self, contract: OptionContract):
         """Greeks calculation not implemented yet."""
         raise NotImplementedError("Greeks calculation for trees not yet implemented")
+    
+    
+    
+    
