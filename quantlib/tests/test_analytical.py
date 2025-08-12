@@ -4,8 +4,8 @@ from datetime import datetime
 from hypothesis import given, strategies as st
 from unittest.mock import patch
 
-from core.payoffs import OptionContract, OptionType, ExerciseStyle
-from pricing.analytical import (
+from quantlib.core.payoffs import OptionContract, OptionType, ExerciseStyle
+from quantlib.pricing.analytical import (
     BlackScholesEngine, 
     PricingResult, 
     GreeksResult, 

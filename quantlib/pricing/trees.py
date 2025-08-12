@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 from datetime import datetime
 from quantlib.core.payoffs import OptionContract, OptionType, ExerciseStyle
-from pricing.analytical import PricingEngine, PricingResult, GreeksResult, MethodUsed
+from quantlib.pricing.analytical import PricingEngine, PricingResult, GreeksResult, MethodUsed, BlackScholesEngine
 
 
 class TreeEngine(PricingEngine, ABC):
@@ -277,5 +277,4 @@ class TrinomialTreeEngine(TreeEngine):
     def greeks(self, contract: OptionContract):
         """Greeks calculation not implemented yet."""
         raise NotImplementedError("Greeks calculation for trees not yet implemented")
-    
     

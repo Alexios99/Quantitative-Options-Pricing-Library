@@ -2,9 +2,9 @@ import pytest
 import numpy as np
 from datetime import datetime
 
-from pricing.trees import BinomialTreeEngine, TrinomialTreeEngine
-from pricing.analytical import BlackScholesEngine, MethodUsed
-from core.payoffs import OptionContract, OptionType, ExerciseStyle
+from quantlib.pricing.trees import BinomialTreeEngine, TrinomialTreeEngine
+from quantlib.pricing.analytical import BlackScholesEngine, MethodUsed
+from quantlib.core.payoffs import OptionContract, OptionType, ExerciseStyle
 
 
 class TestBinomialTreeEngine:

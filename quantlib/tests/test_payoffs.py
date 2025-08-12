@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 from hypothesis import given, strategies as st
-from core.payoffs import (
+from quantlib.core.payoffs import (
     OptionContract, OptionType, ExerciseStyle, CallPayoff, PutPayoff, 
     BarrierOptionContract, BarrierPayoff, BarrierType
 )

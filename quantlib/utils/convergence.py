@@ -1,6 +1,6 @@
-from core.payoffs import OptionContract, ExerciseStyle, OptionType
-from pricing.trees import BinomialTreeEngine, TrinomialTreeEngine
-from pricing.analytical import BlackScholesEngine
+from quantlib.core.payoffs import OptionContract, ExerciseStyle, OptionType
+from quantlib.pricing.trees import BinomialTreeEngine, TrinomialTreeEngine
+from quantlib.pricing.analytical import BlackScholesEngine
 from enum import Enum
 import time
 import pandas as pd

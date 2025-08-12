@@ -1,0 +1,4 @@
+# file: /Users/alexiosphilalithis/Library/CloudStorage/OneDrive-Personal/Documents/Projects/Quantitative Options Pricing Library/quantlib/utils/convergence.py
+# hypothesis_version: 6.137.1
+
+[0.0, 0.001, 0.45, 0.5, 1000.0, 5000, 'N', 'abs_err', 'off', 'on', 'price_RE']
