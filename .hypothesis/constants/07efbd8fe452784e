@@ -1,0 +1,4 @@
+# file: /Users/alexiosphilalithis/Library/CloudStorage/OneDrive-Personal/Documents/Projects/Quantitative Options Pricing Library/quantlib/core/payoffs.py
+# hypothesis_version: 6.137.1
+
+['american', 'call', 'down-and-in', 'down-and-out', 'european', 'put', 'up-and-in', 'up-and-out']

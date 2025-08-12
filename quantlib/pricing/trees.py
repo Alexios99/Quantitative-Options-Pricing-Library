@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import numpy as np
 from datetime import datetime
-from core.payoffs import OptionContract, OptionType, ExerciseStyle
+from quantlib.core.payoffs import OptionContract, OptionType, ExerciseStyle
 from pricing.analytical import PricingEngine, PricingResult, GreeksResult, MethodUsed
 
 
@@ -18,11 +18,18 @@ class TreeEngine(PricingEngine, ABC):
 
     # universal intrinsic payoff 
     def _intrinsic(self, c: OptionContract) -> float:
-        return max(0.0, (c.spot - c.strike) if c.option == OptionType.CALL else (c.strike - c.spot))
-
+        if c.option == OptionType.CALL:
+            result = max(0.0, c.spot - c.strike)
+        else:
+            result = max(0.0, c.strike - c.spot)
+        return result
     def price(self, contract: OptionContract) -> PricingResult:
         # 0 time → intrinsic
         if contract.time_to_expiry == 0.0:
+            intrinsic_val = self._intrinsic(contract)
+            return PricingResult(price=float(intrinsic_val), method=self.method_used, time=datetime.now())
+        # Near-zero time → intrinsic
+        if abs(contract.time_to_expiry) < 1e-10:
             return PricingResult(price=float(self._intrinsic(contract)), method=self.method_used, time=datetime.now())
 
         # Compute baseline lattice price 
@@ -48,7 +55,7 @@ class TreeEngine(PricingEngine, ABC):
         
 
 class BinomialTreeEngine(TreeEngine):
-    def __init__(self, n_steps: int, richardson: str = "auto"):
+    def __init__(self, n_steps: int, richardson: str = "off"):
         """
         richardson: "off" | "on" | "auto"
         - "on": always use Richardson for European
@@ -146,7 +153,7 @@ class BinomialTreeEngine(TreeEngine):
 
 
 class TrinomialTreeEngine(TreeEngine):
-    def __init__(self, n_steps: int, richardson: str = "auto"):
+    def __init__(self, n_steps: int, richardson: str = "off"):
         super().__init__(n_steps)
         self.richardson = richardson
 
@@ -270,7 +277,5 @@ class TrinomialTreeEngine(TreeEngine):
     def greeks(self, contract: OptionContract):
         """Greeks calculation not implemented yet."""
         raise NotImplementedError("Greeks calculation for trees not yet implemented")
-    
-    
     
     

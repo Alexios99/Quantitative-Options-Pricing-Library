@@ -1,0 +1,4 @@
+# file: /Users/alexiosphilalithis/Library/CloudStorage/OneDrive-Personal/Documents/Projects/Quantitative Options Pricing Library/quantlib/pricing/analytical.py
+# hypothesis_version: 6.137.1
+
+[0.0, 0.001, 'binomial tree', 'blackscholes', 'greeks', 'trinomial_tree']

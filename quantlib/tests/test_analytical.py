@@ -113,14 +113,37 @@ class TestBlackScholesEngine:
         greeks = self.engine.greeks(otm_contract)
         assert greeks.delta_call < 0.2
 
-    def test_zero_time_to_expiry_validation(self):
-        invalid_contract = OptionContract(
-            spot=100.0, strike=100.0, time_to_expiry=0.0001,
+    def test_zero_time_to_expiry(self):
+        """Test that zero time to expiry returns intrinsic value"""
+        
+        # ITM Call - should be worth intrinsic
+        itm_call = OptionContract(
+            spot=105, strike=100, time_to_expiry=0.0,
             risk_free_rate=0.05, volatility=0.2,
             option=OptionType.CALL, style=ExerciseStyle.EUROPEAN
         )
-        with pytest.raises(ValueError, match="Time to expiry too low"):
-            self.engine.price(invalid_contract)
+        result = self.engine.price(itm_call)
+        expected_intrinsic = max(0, 105 - 100)  # = 5
+        assert abs(result.price - expected_intrinsic) < 1e-10
+        
+        # OTM Call - should be worth 0
+        otm_call = OptionContract(
+            spot=95, strike=100, time_to_expiry=0.0,
+            risk_free_rate=0.05, volatility=0.2,
+            option=OptionType.CALL, style=ExerciseStyle.EUROPEAN
+        )
+        result = self.engine.price(otm_call)
+        assert abs(result.price - 0.0) < 1e-10
+        
+        # ITM Put - should be worth intrinsic
+        itm_put = OptionContract(
+            spot=95, strike=100, time_to_expiry=0.0,
+            risk_free_rate=0.05, volatility=0.2,
+            option=OptionType.PUT, style=ExerciseStyle.EUROPEAN
+        )
+        result = self.engine.price(itm_put)
+        expected_intrinsic = max(0, 100 - 95)  # = 5
+        assert abs(result.price - expected_intrinsic) < 1e-10
 
     def test_low_volatility_validation(self):
         invalid_contract = OptionContract(

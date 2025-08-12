@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 import numpy as np
 from scipy.stats import norm 
-from core.payoffs import OptionContract, OptionType
+from quantlib.core.payoffs import OptionContract, OptionType
 from datetime import datetime
 
 
@@ -45,6 +45,14 @@ class PricingEngine(ABC):
 
 class BlackScholesEngine(PricingEngine):
     def price(self, contract: OptionContract) -> PricingResult:
+        if contract.time_to_expiry == 0.0:
+            if contract.option == OptionType.CALL:
+                intrinsic = max(0.0, contract.spot - contract.strike)
+            elif contract.option == OptionType.PUT:
+                intrinsic = max(0.0, contract.strike - contract.spot)
+            else:
+                raise ValueError(f"Unsupported option type: {contract.option}")
+            return PricingResult(price=intrinsic, method=MethodUsed.BS, time=datetime.now())
         d1, d2, nd1, nd2, n_neg_d1, n_neg_d2 = self._calculate_bs_components(contract)
         if contract.option == OptionType.CALL:
             price_value = contract.spot * nd1 - (contract.strike * np.exp(-contract.risk_free_rate * contract.time_to_expiry) * nd2)
@@ -100,5 +108,6 @@ class BlackScholesEngine(PricingEngine):
         """Validate parameters for numerical stability"""
         if contract.volatility < 0.001:
             raise ValueError(f"Volatility too low ({contract.volatility:.6f}), minimum required: 0.001")
-        if contract.time_to_expiry <= 1/365:
-            raise ValueError(f"Time to expiry too low ({contract.time_to_expiry:.6f}), minimum: {1/365:.6f}")
+        if contract.time_to_expiry < 0:
+            raise ValueError(f"Time to expiry cannot be negative ({contract.time_to_expiry:.6f})")
+        
