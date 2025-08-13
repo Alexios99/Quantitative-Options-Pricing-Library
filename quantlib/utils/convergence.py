@@ -94,6 +94,3 @@ def run_study(contract: OptionContract, engine_cls, n_grid: Iterable[int], use_e
     )
 
 
-
-
-        
