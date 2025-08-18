@@ -12,6 +12,7 @@ class MethodUsed(Enum):
     GREEKS = 'greeks'
     BINOMIAL_TREE = 'binomial tree'
     TRINOMIAL_TREE = 'trinomial_tree'  
+    PDE = 'pde'
 
 @dataclass
 class PricingResult:
