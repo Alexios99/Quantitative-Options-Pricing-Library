@@ -522,7 +522,7 @@ def compare_methods_convergence(contract, tree_ns=None, pde_spatial=None, pde_te
     
     # Import here to avoid circular imports
     from quantlib.pricing.trees import BinomialTreeEngine
-    from quantlib.utils.convergence import run_study, run_pde_convergence_study
+    from quantlib.utils.convergence import run_study, run_pde_convergence_study, reference_price
     
     # Get reference price
     ref_price = reference_price(contract)
