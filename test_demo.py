@@ -6,6 +6,7 @@ from quantlib.utils.convergence import run_study, UseEngineRichardson
 from quantlib.utils.visualization import plot_convergence_summary, plot_convergence, plot_log_convergence, plot_richardson_comparison
 from quantlib.pricing.pde import PDEEngine
 from types import SimpleNamespace
+import numpy as np
 
 # 1. Fake parameter objects
 grid_params = SimpleNamespace(
@@ -39,6 +40,8 @@ engine = PDEEngine(grid_params, solver_params)
 bs_engine = BlackScholesEngine()
 bs_result = bs_engine.price(contract)
 pde_result = engine.price(contract)
+intrinsic = np.maximum(engine.s_grid - contract.strike, 0)
+print(intrinsic)
 
 print(f"Black-Scholes: {bs_result.price:.6f}")
 print(f"PDE:          {pde_result.price:.6f}")

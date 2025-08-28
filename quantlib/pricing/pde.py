@@ -1,5 +1,5 @@
 from quantlib.pricing.analytical import PricingResult, PricingEngine, MethodUsed
-from quantlib.core.payoffs import OptionContract, OptionType, CallPayoff, PutPayoff
+from quantlib.core.payoffs import OptionContract, OptionType, CallPayoff, PutPayoff, ExerciseStyle
 import numpy as np
 from datetime import datetime
 from scipy import linalg
@@ -32,12 +32,16 @@ class PDEEngine(PricingEngine):
             sol_array[0, time_step] = self.S_min_boundary
             sol_array[-1, time_step] = self.S_max_boundary
             self._crank_nicolson_step(contract, sol_array, time_step)
+
+            if contract.style == ExerciseStyle.AMERICAN:
+                iterations = self._apply_psor(contract, sol_array, time_step)
+
             max_val = np.max(np.abs(sol_array[:, time_step]))
             if max_val > 1000:  # Reasonable threshold
                 break
 
-        # Extract price at current spot
-        price_value = sol_array[self.spot_index, -1]
+        # Replace the final price pick with linear interpolation between the two bracketing grid nodes.
+        price_value = self._interp_at_spot(sol_array[:, -1], contract.spot)
         
         return PricingResult(price=price_value, method=MethodUsed.PDE, time=datetime.now())
 
@@ -50,22 +54,33 @@ class PDEEngine(PricingEngine):
         self.dt = contract.time_to_expiry / self.n_time
         self.spot_index = np.searchsorted(self.s_grid, contract.spot)
         
-    def _setup_boundary_conditions(self, contract: OptionContract, time_index):
-        tau = self.t_grid[time_index]
+        
+    def _setup_boundary_conditions(self, contract, time_index: int):
+        tau = self.t_grid[time_index]  # time remaining
+
         if contract.option == OptionType.CALL:
-            self.S_min_boundary = 0
-            self.S_max_boundary = max(self.s_max - contract.strike * np.exp(-contract.risk_free_rate * tau), 0)
+            # S -> 0
+            self.S_min_boundary = 0.0
+
+            # S -> ∞  (no dividends): same for American and European
+            discK = contract.strike * np.exp(-contract.risk_free_rate * tau)
+            self.S_max_boundary = max(self.s_max - discK, 0.0)
+
         else:
-            self.S_min_boundary = contract.strike * np.exp(-contract.risk_free_rate * tau)
-            self.S_max_boundary = 0
-        
-        
+            # PUT
+            if contract.style == ExerciseStyle.AMERICAN:
+                self.S_min_boundary = float(contract.strike)  # immediate exercise allowed
+            else:
+                self.S_min_boundary = contract.strike * np.exp(-contract.risk_free_rate * tau)
+            self.S_max_boundary = 0.0
+
+
     def _crank_nicolson_step(self, contract: OptionContract, V: np.ndarray, time_index: int):
         r = contract.risk_free_rate
         sigma = contract.volatility
         dt = self.dt
         dS = self.dx
-        theta = self.theta  # 0.5 for CN
+        theta = self.theta  
 
         # Interior nodes
         S = self.s_grid[1:-1]                      # shape (M,)
@@ -110,10 +125,54 @@ class PDEEngine(PricingEngine):
         M = len(Ad)
         A = np.diag(Ad) + np.diag(Au, 1) + np.diag(Al, -1)
         V[1:-1, time_index] = np.linalg.solve(A, rhs)
+        
+        self.psor_A_matrix = A
+        self.psor_rhs = rhs
 
-    def _apply_psor(self):  # For American exercise
+    def _apply_psor(self, contract: OptionContract, sol_array: np.ndarray, time_index: int):
         """Apply PSOR for American early exercise constraint"""
-        pass
+        # For all spatial grid points at once:
+        if contract.option == OptionType.CALL:
+            intrinsic = np.maximum(self.s_grid - contract.strike, 0)
+        else:
+            intrinsic = np.maximum(contract.strike - self.s_grid, 0)
+        for iteration in range(self.psor_max_iter):
+            old_values = sol_array[:, time_index].copy()
+            
+            for i in range(1, self.n_space - 1): 
+                matrix_i = i - 1  # Convert to matrix index
+    
+                # Get matrix coefficients for point i
+                a_left = self.psor_A_matrix[matrix_i, matrix_i-1] if matrix_i > 0 else 0
+                a_center = self.psor_A_matrix[matrix_i, matrix_i]
+                a_right = self.psor_A_matrix[matrix_i, matrix_i+1] if matrix_i < len(self.psor_rhs)-1 else 0
+                
+                # Solve CN equation for point i
+                v_computed = (self.psor_rhs[matrix_i] - a_left * sol_array[i-1, time_index] - a_right * sol_array[i+1, time_index]) / a_center
+                
+                # SOR relaxation
+                v_old = sol_array[i, time_index]
+                v_sor = v_old + self.psor_omega * (v_computed - v_old)
+                
+                # Projection (early exercise constraint)
+                sol_array[i, time_index] = max(v_sor, intrinsic[i])
+            
+            max_change = np.max(np.abs(sol_array[1:-1, time_index] - old_values[1:-1]))
+            if max_change < self.psor_tol:  
+                break
+    
+    def _interp_at_spot(self, values_at_t, spot):
+        i = np.searchsorted(self.s_grid, spot)
+        if i == 0:
+            return float(values_at_t[0])
+        if i >= self.n_space:
+            return float(values_at_t[-1])
+        s0, s1 = self.s_grid[i-1], self.s_grid[i]
+        v0, v1 = values_at_t[i-1], values_at_t[i]
+        w = (spot - s0) / (s1 - s0)
+        return float(v0 + w * (v1 - v0))
+
+        
 
 
     def greeks(self, contract: OptionContract):
