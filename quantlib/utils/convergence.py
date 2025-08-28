@@ -1,11 +1,13 @@
 from quantlib.core.payoffs import OptionContract, ExerciseStyle, OptionType
 from quantlib.pricing.trees import BinomialTreeEngine, TrinomialTreeEngine
 from quantlib.pricing.analytical import BlackScholesEngine
+from quantlib.pricing.pde import PDEEngine
 from enum import Enum
 import time
 import pandas as pd
 import numpy as np
 from typing import Dict, Optional, Any, Iterable
+from types import SimpleNamespace
 from dataclasses import dataclass
 
 class UseEngineRichardson(str, Enum):
@@ -21,6 +23,16 @@ class ConvergenceReport:
     richardson_gain: Optional[float]       # ratio err_noRE / err_RE at largest N
     passed: bool                           # basic thresholds met
     meta: Dict[str, Any]                   # params used
+
+@dataclass
+class PDEConvergenceReport:
+    spatial_df: pd.DataFrame               # spatial convergence results
+    temporal_df: pd.DataFrame              # temporal convergence results
+    reference_price: float                 # benchmark price
+    spatial_order: float                   # spatial convergence order
+    temporal_order: float                  # temporal convergence order
+    passed: bool                           # convergence criteria met
+    meta: Dict[str, Any]                   # grid parameters used
 
 
 def reference_price(contract: OptionContract, n_steps=5000):
@@ -93,4 +105,124 @@ def run_study(contract: OptionContract, engine_cls, n_grid: Iterable[int], use_e
         meta=dict(engine=engine_cls.__name__, grid=list(n_grid))
     )
 
-
+def run_pde_convergence_study(contract: OptionContract, 
+                             reference_engine=None, 
+                             spatial_sizes=None, 
+                             temporal_sizes=None,
+                             s_max=200,
+                             theta=0.5,
+                             psor_params=None) -> PDEConvergenceReport:
+    """Run comprehensive grid refinement study for PDE methods
+    
+    Args:
+        contract: Option contract to price
+        reference_engine: Engine for reference price (defaults to analytical)
+        spatial_sizes: List of spatial grid sizes to test
+        temporal_sizes: List of temporal grid sizes to test
+        s_max: Maximum spot price for grid
+        theta: Theta parameter for time discretization (0.5 = Crank-Nicolson)
+        psor_params: PSOR solver parameters
+    
+    Returns:
+        PDEConvergenceReport with spatial and temporal convergence analysis
+    """
+    
+    if spatial_sizes is None:
+        spatial_sizes = [50, 100, 200, 400]
+    if temporal_sizes is None:
+        temporal_sizes = [250, 500, 1000, 2000]
+    if psor_params is None:
+        psor_params = SimpleNamespace(
+            psor_omega=1.2,
+            psor_tol=1e-6,
+            psor_max_iter=50
+        )
+    
+    # Get reference price
+    if reference_engine is None:
+        ref_price = reference_price(contract)
+    else:
+        ref_price = reference_engine.price(contract).price
+    
+    # Study spatial convergence (fix temporal)
+    spatial_results = []
+    for n_space in spatial_sizes:
+        grid_params = SimpleNamespace(
+            n_space=n_space,
+            n_time=1000,  # Fixed high resolution
+            s_max=s_max,
+            theta=theta
+        )
+        
+        t0 = time.perf_counter()
+        engine = PDEEngine(grid_params, psor_params)
+        result = engine.price(contract)
+        dt = (time.perf_counter() - t0) * 1000.0
+        
+        abs_err = abs(result.price - ref_price)
+        rel_err = abs_err / ref_price if ref_price != 0 else np.nan
+        
+        spatial_results.append({
+            'n_space': n_space,
+            'price': result.price,
+            'abs_err': abs_err,
+            'rel_err': rel_err,
+            'ms': dt
+        })
+    
+    # Study temporal convergence (fix spatial)
+    temporal_results = []
+    for n_time in temporal_sizes:
+        grid_params = SimpleNamespace(
+            n_space=200,  # Fixed high resolution
+            n_time=n_time,
+            s_max=s_max,
+            theta=theta
+        )
+        
+        t0 = time.perf_counter()
+        engine = PDEEngine(grid_params, psor_params)
+        result = engine.price(contract)
+        dt = (time.perf_counter() - t0) * 1000.0
+        
+        abs_err = abs(result.price - ref_price)
+        rel_err = abs_err / ref_price if ref_price != 0 else np.nan
+        
+        temporal_results.append({
+            'n_time': n_time,
+            'price': result.price,
+            'abs_err': abs_err,
+            'rel_err': rel_err,
+            'ms': dt
+        })
+    
+    # Convert to DataFrames
+    spatial_df = pd.DataFrame(spatial_results)
+    temporal_df = pd.DataFrame(temporal_results)
+    
+    # Estimate convergence orders
+    spatial_order = estimate_order(spatial_df['n_space'], spatial_df['abs_err'])
+    temporal_order = estimate_order(temporal_df['n_time'], temporal_df['abs_err'])
+    
+    # Check convergence criteria
+    final_spatial_err = spatial_df['abs_err'].iloc[-1]
+    final_temporal_err = temporal_df['abs_err'].iloc[-1]
+    passed = (final_spatial_err < 1e-3 and final_temporal_err < 1e-3 and 
+              spatial_order > 1.5 and temporal_order > 0.8)  # Expected: O(h²), O(Δt)
+    
+    return PDEConvergenceReport(
+        spatial_df=spatial_df,
+        temporal_df=temporal_df,
+        reference_price=ref_price,
+        spatial_order=spatial_order,
+        temporal_order=temporal_order,
+        passed=passed,
+        meta={
+            'engine': 'PDEEngine',
+            'spatial_sizes': spatial_sizes,
+            'temporal_sizes': temporal_sizes,
+            's_max': s_max,
+            'theta': theta,
+            'psor_params': psor_params.__dict__
+        }
+    )

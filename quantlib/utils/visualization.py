@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from typing import Optional, List, Tuple
-from quantlib.utils.convergence import ConvergenceReport
+from quantlib.utils.convergence import ConvergenceReport, PDEConvergenceReport
 
 
 def plot_convergence(report: ConvergenceReport, save_path: Optional[str] = None):
@@ -342,3 +342,271 @@ def plot_convergence_summary(report: ConvergenceReport, include_stats: bool = Tr
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     
     return fig, (ax1, ax2, ax3, ax4)
+
+def plot_pde_convergence(report: PDEConvergenceReport, save_path: Optional[str] = None):
+    """Plot PDE spatial and temporal convergence analysis"""
+    
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+    
+    # Spatial convergence (linear)
+    spatial_ns = report.spatial_df['n_space'].values
+    spatial_errors = report.spatial_df['abs_err'].values
+    spatial_bp = (spatial_errors / report.reference_price) * 10000
+    
+    ax1.plot(spatial_ns, spatial_bp, 'o-', linewidth=2, markersize=6, 
+             color='steelblue', label='Spatial Error')
+    ax1.set_xlabel('Spatial Grid Points (N_space)')
+    ax1.set_ylabel('Error (basis points)')
+    ax1.set_title('Spatial Convergence')
+    ax1.grid(True, alpha=0.3)
+    ax1.legend()
+    
+    # Temporal convergence (linear)
+    temporal_ns = report.temporal_df['n_time'].values
+    temporal_errors = report.temporal_df['abs_err'].values
+    temporal_bp = (temporal_errors / report.reference_price) * 10000
+    
+    ax2.plot(temporal_ns, temporal_bp, 's-', linewidth=2, markersize=6, 
+             color='darkred', label='Temporal Error')
+    ax2.set_xlabel('Time Steps (N_time)')
+    ax2.set_ylabel('Error (basis points)')
+    ax2.set_title('Temporal Convergence')
+    ax2.grid(True, alpha=0.3)
+    ax2.legend()
+    
+    # Log-log spatial convergence with fitted line
+    ax3.loglog(spatial_ns, spatial_bp, 'o-', linewidth=2, markersize=6, 
+               color='steelblue', label='Spatial')
+    
+    if len(spatial_ns) >= 2:
+        # Fit theoretical O(h²) line
+        log_ns = np.log(spatial_ns)
+        log_errors = np.log(spatial_bp)
+        slope, intercept = np.polyfit(log_ns, log_errors, 1)
+        
+        extended_ns = np.logspace(np.log10(spatial_ns[0]), np.log10(spatial_ns[-1]), 100)
+        fitted_errors = np.exp(intercept) * (extended_ns ** slope)
+        
+        ax3.loglog(extended_ns, fitted_errors, '--', color='gray', alpha=0.7, 
+                   label=f'Fitted: O(N^{slope:.2f})')
+        
+        # Theoretical O(h²) reference
+        h_values = 1.0 / spatial_ns  # h ∝ 1/N for uniform grid
+        theoretical = spatial_bp[0] * (h_values / h_values[0])**2
+        ax3.loglog(spatial_ns, theoretical, ':', color='green', alpha=0.7, 
+                   label='Theoretical O(h²)')
+    
+    ax3.set_xlabel('Spatial Grid Points')
+    ax3.set_ylabel('Error (basis points)')
+    ax3.set_title('Log-Log Spatial Convergence')
+    ax3.grid(True, alpha=0.3)
+    ax3.legend()
+    
+    # Statistics and summary
+    ax4.axis('off')
+    
+    final_spatial_bp = spatial_bp[-1]
+    final_temporal_bp = temporal_bp[-1]
+    
+    status = "PASSED" if report.passed else "FAILED"
+    status_color = "lightgreen" if report.passed else "lightcoral"
+    
+    stats_text = f"""PDE CONVERGENCE ANALYSIS
+
+Reference Price: {report.reference_price:.6f}
+
+SPATIAL CONVERGENCE:
+Final Error: {final_spatial_bp:.2f} bp
+Order Estimate: {report.spatial_order:.3f}
+Expected: ~2.0 (O(h²))
+
+TEMPORAL CONVERGENCE:
+Final Error: {final_temporal_bp:.2f} bp
+Order Estimate: {report.temporal_order:.3f}
+Expected: ~1.0 (O(Δt)) for θ={report.meta['theta']}
+
+GRID PARAMETERS:
+S_max: {report.meta['s_max']}
+Theta: {report.meta['theta']} ({'Crank-Nicolson' if report.meta['theta'] == 0.5 else 'Implicit' if report.meta['theta'] == 1.0 else 'Mixed'})
+
+Status: {status}
+
+bp = 1e4 × |P_PDE - P_ref| / P_ref"""
+    
+    ax4.text(0.05, 0.95, stats_text, transform=ax4.transAxes, 
+             fontsize=10, verticalalignment='top', fontfamily='monospace',
+             bbox=dict(boxstyle='round,pad=1', facecolor=status_color, alpha=0.8))
+    
+    fig.suptitle(f'PDE Convergence Analysis\nReference: {report.reference_price:.4f}', 
+                 fontsize=16, y=0.95)
+    
+    plt.tight_layout(rect=[0, 0.03, 1, 0.92])
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    return fig, (ax1, ax2, ax3, ax4)
+
+def plot_pde_timing_analysis(report: PDEConvergenceReport, save_path: Optional[str] = None):
+    """Plot PDE computational timing vs grid size"""
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    
+    # Spatial timing
+    spatial_ns = report.spatial_df['n_space'].values
+    spatial_times = report.spatial_df['ms'].values
+    
+    ax1.plot(spatial_ns, spatial_times, 'o-', linewidth=2, markersize=6, 
+             color='steelblue', label='Spatial')
+    ax1.set_xlabel('Spatial Grid Points')
+    ax1.set_ylabel('Time (ms)')
+    ax1.set_title('Spatial Grid Timing')
+    ax1.grid(True, alpha=0.3)
+    
+    # Fit timing complexity
+    if len(spatial_ns) >= 2:
+        log_ns = np.log(spatial_ns)
+        log_times = np.log(spatial_times)
+        slope, intercept = np.polyfit(log_ns, log_times, 1)
+        
+        extended_ns = np.logspace(np.log10(spatial_ns[0]), np.log10(spatial_ns[-1]), 100)
+        fitted_times = np.exp(intercept) * (extended_ns ** slope)
+        
+        ax1.loglog(spatial_ns, spatial_times, 'o-', color='steelblue')
+        ax1.loglog(extended_ns, fitted_times, '--', color='gray', alpha=0.7, 
+                   label=f'O(N^{slope:.2f})')
+        ax1.legend()
+        ax1.set_title(f'Spatial Timing: O(N^{slope:.2f})')
+    
+    # Temporal timing
+    temporal_ns = report.temporal_df['n_time'].values
+    temporal_times = report.temporal_df['ms'].values
+    
+    ax2.plot(temporal_ns, temporal_times, 's-', linewidth=2, markersize=6, 
+             color='darkred', label='Temporal')
+    ax2.set_xlabel('Time Steps')
+    ax2.set_ylabel('Time (ms)')
+    ax2.set_title('Temporal Grid Timing')
+    ax2.grid(True, alpha=0.3)
+    
+    if len(temporal_ns) >= 2:
+        log_ns = np.log(temporal_ns)
+        log_times = np.log(temporal_times)
+        slope, intercept = np.polyfit(log_ns, log_times, 1)
+        
+        extended_ns = np.logspace(np.log10(temporal_ns[0]), np.log10(temporal_ns[-1]), 100)
+        fitted_times = np.exp(intercept) * (extended_ns ** slope)
+        
+        ax2.loglog(temporal_ns, temporal_times, 's-', color='darkred')
+        ax2.loglog(extended_ns, fitted_times, '--', color='gray', alpha=0.7, 
+                   label=f'O(N^{slope:.2f})')
+        ax2.legend()
+        ax2.set_title(f'Temporal Timing: O(N^{slope:.2f})')
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    return fig, (ax1, ax2)
+
+def compare_methods_convergence(contract, tree_ns=None, pde_spatial=None, pde_temporal=None, save_path: Optional[str] = None):
+    """Compare convergence of different pricing methods"""
+    
+    if tree_ns is None:
+        tree_ns = [50, 100, 200, 500, 1000]
+    if pde_spatial is None:
+        pde_spatial = [50, 100, 200, 400]
+    if pde_temporal is None:
+        pde_temporal = [250, 500, 1000, 2000]
+    
+    # Import here to avoid circular imports
+    from quantlib.pricing.trees import BinomialTreeEngine
+    from quantlib.utils.convergence import run_study, run_pde_convergence_study
+    
+    # Get reference price
+    ref_price = reference_price(contract)
+    
+    # Run tree convergence
+    tree_report = run_study(contract, BinomialTreeEngine, tree_ns)
+    
+    # Run PDE convergence
+    pde_report = run_pde_convergence_study(contract, 
+                                          spatial_sizes=pde_spatial,
+                                          temporal_sizes=pde_temporal)
+    
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+    
+    # Tree convergence
+    tree_errors = (tree_report.df['abs_err'] / ref_price) * 10000
+    ax1.plot(tree_report.df['N'], tree_errors, 'o-', linewidth=2, 
+             color='green', label='Binomial Tree')
+    ax1.set_xlabel('Steps (N)')
+    ax1.set_ylabel('Error (basis points)')
+    ax1.set_title('Tree Method Convergence')
+    ax1.grid(True, alpha=0.3)
+    ax1.legend()
+    
+    # PDE spatial convergence
+    pde_spatial_errors = (pde_report.spatial_df['abs_err'] / ref_price) * 10000
+    ax2.plot(pde_report.spatial_df['n_space'], pde_spatial_errors, 's-', 
+             linewidth=2, color='steelblue', label='PDE Spatial')
+    ax2.set_xlabel('Spatial Points')
+    ax2.set_ylabel('Error (basis points)')
+    ax2.set_title('PDE Spatial Convergence')
+    ax2.grid(True, alpha=0.3)
+    ax2.legend()
+    
+    # Combined log-log comparison
+    ax3.loglog(tree_report.df['N'], tree_errors, 'o-', 
+               color='green', label=f'Tree O(N^{-tree_report.order_estimate:.2f})')
+    ax3.loglog(pde_report.spatial_df['n_space'], pde_spatial_errors, 's-', 
+               color='steelblue', label=f'PDE Spatial O(N^{-pde_report.spatial_order:.2f})')
+    
+    pde_temporal_errors = (pde_report.temporal_df['abs_err'] / ref_price) * 10000
+    ax3.loglog(pde_report.temporal_df['n_time'], pde_temporal_errors, '^-', 
+               color='darkred', label=f'PDE Temporal O(N^{-pde_report.temporal_order:.2f})')
+    
+    ax3.set_xlabel('Grid Points / Steps')
+    ax3.set_ylabel('Error (basis points)')
+    ax3.set_title('Method Comparison (Log-Log)')
+    ax3.grid(True, alpha=0.3)
+    ax3.legend()
+    
+    # Summary statistics
+    ax4.axis('off')
+    
+    summary_text = f"""METHOD COMPARISON SUMMARY
+
+Reference Price: {ref_price:.6f}
+
+BINOMIAL TREE:
+Final Error: {tree_errors.iloc[-1]:.2f} bp
+Order: {tree_report.order_estimate:.3f}
+Max N: {tree_report.df['N'].iloc[-1]}
+
+PDE METHOD:
+Spatial Error: {pde_spatial_errors.iloc[-1]:.2f} bp
+Temporal Error: {pde_temporal_errors.iloc[-1]:.2f} bp
+Spatial Order: {pde_report.spatial_order:.3f}
+Temporal Order: {pde_report.temporal_order:.3f}
+
+PERFORMANCE:
+Tree passed: {tree_report.passed}
+PDE passed: {pde_report.passed}
+
+bp = 1e4 × |P_num - P_ref| / P_ref"""
+    
+    ax4.text(0.05, 0.95, summary_text, transform=ax4.transAxes, 
+             fontsize=10, verticalalignment='top', fontfamily='monospace',
+             bbox=dict(boxstyle='round,pad=1', facecolor='lightblue', alpha=0.8))
+    
+    fig.suptitle(f'Pricing Method Convergence Comparison\n{contract.option.value.title()} Option', 
+                 fontsize=16, y=0.95)
+    
+    plt.tight_layout(rect=[0, 0.03, 1, 0.92])
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    return fig, (ax1, ax2, ax3, ax4), tree_report, pde_report
