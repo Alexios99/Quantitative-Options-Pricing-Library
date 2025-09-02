@@ -32,7 +32,7 @@ class MonteCarloEngine(PricingEngine):
                              time=datetime.now(), 
                              standard_error=std_error, 
                              confidence_interval=ci_half_width,
-                             n_paths=self.n_paths)
+                             n_paths=len(discounted_payoffs))
 
     def _generate_payoffs(self, contract: OptionContract) -> np.ndarray:
         """Handle path generation and variance reduction"""

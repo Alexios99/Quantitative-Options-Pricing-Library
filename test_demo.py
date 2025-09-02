@@ -1,32 +1,36 @@
+# Add this to your test_demo.py
 from quantlib.core.payoffs import OptionContract, OptionType, ExerciseStyle
 from quantlib.pricing.monte_carlo import MonteCarloEngine
+import numpy as np
 
-# Create a simple call option
-contract = OptionContract(
-    spot=100.0,
-    strike=100.0,
-    time_to_expiry=1.0,
-    risk_free_rate=0.05,
-    volatility=0.2,
-    option=OptionType.CALL,
-    style=ExerciseStyle.EUROPEAN
+# Test WITHOUT antithetic variates first
+print("=== WITHOUT ANTITHETIC ===")
+engine_small = MonteCarloEngine(n_steps=50, n_paths=1000, variance_reduction=None, seed=42)
+engine_large = MonteCarloEngine(n_steps=50, n_paths=10000, variance_reduction=None, seed=123)
+
+standard_call = OptionContract(
+    spot=100.0, strike=100.0, time_to_expiry=1.0,
+    risk_free_rate=0.05, volatility=0.2,
+    option=OptionType.CALL, style=ExerciseStyle.EUROPEAN
 )
 
-# Test basic Monte Carlo
-mc_engine = MonteCarloEngine(n_steps=50, n_paths=10000, seed=42)
-result = mc_engine.price(contract)
+result_small = engine_small.price(standard_call)
+result_large = engine_large.price(standard_call)
 
-print(f"MC Price: {result.price:.4f}")
-print(f"Std Error: {result.standard_error:.4f}")
-print(f"CI Half-Width: {result.confidence_interval:.4f}")
+print(f"Small: {result_small.n_paths} paths, SE: {result_small.standard_error:.6f}")
+print(f"Large: {result_large.n_paths} paths, SE: {result_large.standard_error:.6f}")
+print(f"Ratio: {result_small.standard_error / result_large.standard_error:.6f}")
+print(f"Expected: {np.sqrt(1000/10000):.6f}")
 
-# Compare standard errors
-mc_normal = MonteCarloEngine(n_steps=50, n_paths=10000, seed=42)
-mc_antithetic = MonteCarloEngine(n_steps=50, n_paths=10000, variance_reduction="antithetic", seed=42)
+# Test WITH antithetic variates
+print("\n=== WITH ANTITHETIC ===")
+engine_small_ant = MonteCarloEngine(n_steps=50, n_paths=1000, variance_reduction="antithetic", seed=42)
+engine_large_ant = MonteCarloEngine(n_steps=50, n_paths=10000, variance_reduction="antithetic", seed=123)
 
-result_normal = mc_normal.price(contract)
-result_antithetic = mc_antithetic.price(contract)
+result_small_ant = engine_small_ant.price(standard_call)
+result_large_ant = engine_large_ant.price(standard_call)
 
-print(f"Normal Std Error: {result_normal.standard_error:.6f}")
-print(f"Antithetic Std Error: {result_antithetic.standard_error:.6f}")
-print(f"Variance Reduction: {(1 - result_antithetic.standard_error/result_normal.standard_error)*100:.1f}%")
+print(f"Small: {result_small_ant.n_paths} paths, SE: {result_small_ant.standard_error:.6f}")
+print(f"Large: {result_large_ant.n_paths} paths, SE: {result_large_ant.standard_error:.6f}")
+print(f"Ratio: {result_small_ant.standard_error / result_large_ant.standard_error:.6f}")
+print(f"Expected: {np.sqrt(result_small_ant.n_paths/result_large_ant.n_paths):.6f}")
