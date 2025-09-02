@@ -44,14 +44,12 @@ class MonteCarloEngine(PricingEngine):
             
             half_paths = self.n_paths // 2
             
-            # Generate random numbers yourself
+            # Generate random numbers 
             Z = np.random.normal(size=(half_paths, self.n_steps))
             
-            # Create normal and antithetic pairs
             normal_final_prices = self._simulate_gbm_with_randoms(contract, Z)
             antithetic_final_prices = self._simulate_gbm_with_randoms(contract, -Z)  # Key: use -Z
             
-            # Calculate payoffs
             normal_payoffs = self._calculate_payoffs_from_prices(contract, normal_final_prices)
             antithetic_payoffs = self._calculate_payoffs_from_prices(contract, antithetic_final_prices)
             
