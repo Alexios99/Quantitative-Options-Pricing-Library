@@ -13,6 +13,7 @@ class MethodUsed(Enum):
     BINOMIAL_TREE = 'binomial tree'
     TRINOMIAL_TREE = 'trinomial_tree'  
     PDE = 'pde'
+    MONTE_CARLO = 'monte_carlo'
 
 @dataclass
 class PricingResult:
