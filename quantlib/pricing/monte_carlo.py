@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 import numpy as np
 
@@ -64,16 +64,77 @@ class MonteCarloEngine(PricingEngine):
         delta_call = float(np.mean(call_samples))
         delta_put = float(np.mean(put_samples))
 
+        inital_price_for_greeks = self.price(contract).price
+        vega = self._calculate_vega(contract, inital_price_for_greeks)
+
+        theta_call, theta_put = self._calculate_theta(contract, inital_price_for_greeks)
+        rho_call, rho_put = self._calculate_rho(contract, inital_price_for_greeks)
+
+        gamma = self._calculate_gamma(contract, inital_price_for_greeks)
+
         return GreeksResult(
             delta_call=delta_call,
             delta_put=delta_put,
-            gamma=0.0,
-            theta_call=0.0,
-            theta_put=0.0,
-            vega=0.0,
-            rho_call=0.0,
-            rho_put=0.0,
+            gamma=gamma,
+            theta_call=theta_call,
+            theta_put=theta_put,
+            vega=vega,
+            rho_call=rho_call,
+            rho_put=rho_put,
         )
+    
+    def _calculate_vega(self, contract:OptionContract, current_price) -> float:
+        bumped_price = self.price(self._bump_contract(contract, "volatility"))
+        vega = (bumped_price - current_price) / 0.01
+        return vega
+    
+    def _calculate_theta(self, contract: OptionContract, current_price) -> tuple:
+        bumped_price = self.price(self._bump_contract(contract, "time_to_expiry")).price
+        dt = min(1/365, 0.1 * contract.time_to_expiry)
+        
+        if contract.option == OptionType.CALL:
+            theta_call = (bumped_price - current_price) / dt
+            theta_put = theta_call + contract.risk_free_rate * contract.strike * np.exp(-contract.risk_free_rate * contract.time_to_expiry)
+        else:
+            theta_put = (bumped_price - current_price) / dt
+            theta_call = theta_put - contract.risk_free_rate * contract.strike * np.exp(-contract.risk_free_rate * contract.time_to_expiry)
+        
+        return theta_call, theta_put
+    
+    def _calculate_rho(self, contract: OptionContract, current_price) -> tuple:
+        bumped_price = self.price(self._bump_contract(contract, "risk_free_rate")).price
+        
+        if contract.option == OptionType.CALL:
+            rho_call = (bumped_price - current_price) / 0.01
+            rho_put = rho_call - contract.time_to_expiry * contract.strike * np.exp(-contract.risk_free_rate * contract.time_to_expiry)
+        else:
+            rho_put = (bumped_price - current_price) / 0.01
+            rho_call = rho_put + contract.time_to_expiry * contract.strike * np.exp(-contract.risk_free_rate * contract.time_to_expiry)
+        
+        return rho_put, rho_call
+    
+    def _calculate_gamma(self, contract: OptionContract, current_price) -> float:
+        bumped_up = self.price(self._bump_contract(contract, "spot_up")).price
+        bumped_down = self.price(self._bump_contract(contract, "spot_down")).price
+        h = contract.spot * 0.01
+        
+        gamma = (bumped_up - 2*current_price + bumped_down) / np.square(h)
+
+        return gamma
+    
+    def _bump_contract(self, contract: OptionContract, variable: str) -> OptionContract:
+        if variable == "volatility":
+            bumped_contract = replace(contract, volatility=contract.volatility + 0.01)
+        elif variable == "time_to_expiry":
+            dt = min(1/365, 0.1 * contract.time_to_expiry)
+            bumped_contract = replace(contract, time_to_expiry=contract.time_to_expiry - dt)
+        elif variable == "risk_free_rate":
+            bumped_contract = replace(contract, risk_free_rate=contract.risk_free_rate + 0.01)
+        elif variable == "spot_up":
+            bumped_contract = replace(contract, spot=contract.spot * 1.01)
+        elif variable == "spot_down":
+            bumped_contract = replace(contract, spot=contract.spot * 0.99)
+        return bumped_contract
 
 
     def _generate_payoffs(self, contract: OptionContract) -> np.ndarray:
