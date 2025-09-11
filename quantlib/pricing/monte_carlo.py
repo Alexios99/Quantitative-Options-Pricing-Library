@@ -2,7 +2,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 import numpy as np
 
-from quantlib.core.payoffs import OptionContract,OptionType,CallPayoff, PutPayoff
+from quantlib.core.payoffs import OptionContract,OptionType,CallPayoff, PutPayoff, ExerciseStyle
 from quantlib.pricing.analytical import PricingEngine, PricingResult, GreeksResult, MethodUsed, BlackScholesEngine
 from quantlib.core.stochastic_processes import GeometricBrownianMotion
 
@@ -84,7 +84,7 @@ class MonteCarloEngine(PricingEngine):
         )
     
     def _calculate_vega(self, contract:OptionContract, current_price) -> float:
-        bumped_price = self.price(self._bump_contract(contract, "volatility"))
+        bumped_price = self.price(self._bump_contract(contract, "volatility")).price
         vega = (bumped_price - current_price) / 0.01
         return vega
     
@@ -139,6 +139,15 @@ class MonteCarloEngine(PricingEngine):
 
     def _generate_payoffs(self, contract: OptionContract) -> np.ndarray:
         """Handle path generation and variance reduction for pricing."""
+        if contract.style == ExerciseStyle.EUROPEAN:
+            return self._generate_european_payoffs(contract)
+        
+        # American options: need full paths for Longstaff-Schwartz
+        else:
+            return self._generate_american_payoffs(contract)
+    
+    def _generate_european_payoffs(self, contract: OptionContract) -> np.ndarray:
+        """Handle path generation and variance reduction for pricing european option, terminal values only."""
         sp = GeometricBrownianMotion(drift=contract.risk_free_rate, volatility=contract.volatility)
         vr = (self.variance_reduction or "none").lower()
 
@@ -158,6 +167,70 @@ class MonteCarloEngine(PricingEngine):
             return self._apply_control_variates_on_price(contract, payoffs, final_prices)
 
         return payoffs
+
+    def _generate_american_payoffs(self, contract: OptionContract) -> np.ndarray:
+        """American payoffs using Longstaff-Schwartz with full paths."""
+        vr = (self.variance_reduction or "none").lower()
+        
+        if vr == "antithetic":
+            return self._american_antithetic_payoffs(contract)
+        else:
+            # Generate full paths (not just terminal!)
+            paths = self._generate_full_paths(contract)
+            payoffs = self._longstaff_schwartz_exercise(contract, paths)
+            
+            if vr == "control":
+                return self._apply_american_control_variates(contract, payoffs, paths)
+            
+            return payoffs
+        
+    def _generate_full_paths(self, contract: OptionContract) -> np.ndarray:
+        """Generate complete price paths for American options."""
+        sp = GeometricBrownianMotion(drift=contract.risk_free_rate, volatility=contract.volatility)
+        paths = sp.simulate_paths(contract.spot, contract.time_to_expiry, self.n_paths, self.n_steps, self.seed) 
+        return  paths # Returns [n_paths, n_steps+1] including t=0
+
+    def _longstaff_schwartz_exercise(self, contract: OptionContract, paths: np.ndarray) -> np.ndarray:
+        n_paths, n_time_steps = paths.shape
+        dt = contract.time_to_expiry / self.n_steps
+
+        option_values = np.zeros_like(paths)
+        option_values[:, -1] = self._payoff_from_terminal(contract, paths[:, -1])
+
+        for t in range(n_time_steps - 2, 0, -1):
+            current_spot_prices = paths[:, t]
+            
+            immediate_exercise_value = self._payoff_from_terminal(contract, current_spot_prices)
+
+            in_the_money = immediate_exercise_value > 0
+            if np.sum(in_the_money) < 2:
+                option_values[:, t] = np.exp(-contract.risk_free_rate * dt) *  option_values[:, t+1]
+                continue
+
+            itm_spots = current_spot_prices[in_the_money]
+            itm_future_values = option_values[in_the_money, t+1]
+
+            itm_discounted_future = itm_future_values * np.exp(-contract.risk_free_rate * dt)
+
+            X = np.column_stack([np.ones_like(itm_spots), itm_spots, itm_spots**2,])
+            try:
+                coefficients, _, _, _ = np.linalg.lstsq(X, itm_discounted_future, rcond=None)
+                
+                # Predict continuation values for ALL ITM paths
+                continuation_values = X @ coefficients
+                
+            except np.linalg.LinAlgError:
+                continuation_values = itm_discounted_future
+           
+            exercise_decision = immediate_exercise_value[in_the_money] > continuation_values
+
+            option_values[in_the_money, t] = np.where(exercise_decision, immediate_exercise_value[in_the_money], itm_discounted_future)
+
+            otm_mask = ~in_the_money
+            option_values[otm_mask, t] = option_values[otm_mask, t+1] * np.exp(-contract.risk_free_rate * dt)
+
+        return option_values[:, 1]
+
 
 
     def _generate_plain_terminal_prices(self, contract: OptionContract) -> np.ndarray:
@@ -257,3 +330,5 @@ class MonteCarloEngine(PricingEngine):
         """Compute mean pathwise deltas (kept for compatibility; greeks() uses sample-based version)."""
         call_samples, put_samples = self._pathwise_delta_samples(contract, final_prices)
         return float(np.mean(call_samples)), float(np.mean(put_samples))
+    
+    

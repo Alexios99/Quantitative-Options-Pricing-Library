@@ -4,6 +4,7 @@ from quantlib.pricing.monte_carlo import MonteCarloEngine
 from quantlib.core.stochastic_processes import GeometricBrownianMotion
 from quantlib.pricing.analytical import BlackScholesEngine
 import numpy as np
+from dataclasses import replace
 
 # Create engines
 mc_normal = MonteCarloEngine(n_steps=50, n_paths=10000, variance_reduction=None, seed=42)
@@ -23,34 +24,21 @@ bs_greeks = bs_engine.greeks(contract)
 
 # Add Monte Carlo engine with antithetic variance reduction
 mc_antithetic = MonteCarloEngine(n_steps=50, n_paths=10000, variance_reduction="antithetic", seed=42)
+# Test script idea
+american_put = OptionContract(
+    spot=100, strike=110, time_to_expiry=0.25,
+    risk_free_rate=0.05, volatility=0.2,
+    option=OptionType.PUT, style=ExerciseStyle.AMERICAN
+)
 
-# Calculate Greeks using the antithetic Monte Carlo engine
-mc_greeks_antithetic = mc_antithetic.greeks(contract)
-
-# Print and compare delta_call and delta_put for all methods
-print("Black-Scholes Engine:")
-print(f"Delta Call: {bs_greeks.delta_call}, Delta Put: {bs_greeks.delta_put}")
-
-print("\nMonte Carlo (Normal):")
-print(f"Delta Call: {mc_greeks.delta_call}, Delta Put: {mc_greeks.delta_put}")
-
-print("\nMonte Carlo (Control Variate):")
-print(f"Delta Call: {mc_greeks_control.delta_call}, Delta Put: {mc_greeks_control.delta_put}")
-
-print("\nMonte Carlo (Antithetic):")
-print(f"Delta Call: {mc_greeks_antithetic.delta_call}, Delta Put: {mc_greeks_antithetic.delta_put}")
-
-# Compare Monte Carlo results to Black-Scholes results as percentage differences
-def compare_greeks_percentage(bs_greeks, mc_greeks, method_name):
-    delta_call_diff = abs(bs_greeks.delta_call - mc_greeks.delta_call) / abs(bs_greeks.delta_call) * 100
-    delta_put_diff = abs(bs_greeks.delta_put - mc_greeks.delta_put) / abs(bs_greeks.delta_put) * 100
-    print(f"\nComparison ({method_name}):")
-    print(f"Delta Call Difference: {delta_call_diff:.2f}%")
-    print(f"Delta Put Difference: {delta_put_diff:.2f}%")
-
-# Perform comparisons
-compare_greeks_percentage(bs_greeks, mc_greeks, "Monte Carlo (Normal)")
-compare_greeks_percentage(bs_greeks, mc_greeks_control, "Monte Carlo (Control Variate)")
-compare_greeks_percentage(bs_greeks, mc_greeks_antithetic, "Monte Carlo (Antithetic)")
+# Should be > European equivalent
+american_price = mc_normal.price(american_put).price
+european_price = mc_normal.price(replace(american_put, style=ExerciseStyle.EUROPEAN)).price
 
 
+print(american_price)
+print(european_price)
+print(f'ABS Diff of EURO VS AMERICAN {american_price-european_price}')
+print(f'RELATIVE Diff of EURO VS AMERICAN {(american_price-european_price)/american_price}')
+
+print(mc_greeks)
