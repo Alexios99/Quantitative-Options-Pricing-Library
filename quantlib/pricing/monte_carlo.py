@@ -231,6 +231,61 @@ class MonteCarloEngine(PricingEngine):
 
         return option_values[:, 1]
 
+    def _apply_american_control_variates(self, contract: OptionContract, payoffs: np.ndarray, paths: np.ndarray) -> np.ndarray:
+        """Apply control variates to American option payoffs (simplified approach)."""
+        # For now, use European option as control variate
+        european_contract = replace(contract, style=ExerciseStyle.EUROPEAN)
+        european_payoffs = self._generate_european_payoffs(european_contract)
+        
+        # Simple control: use correlation between American and European payoffs
+        if len(european_payoffs) != len(payoffs):
+            # Fallback: no control variate
+            return payoffs
+        
+        # Basic control variate implementation
+        var_control = np.var(european_payoffs, ddof=1)
+        if var_control == 0.0:
+            return payoffs
+        
+        cov = np.cov(payoffs, european_payoffs, ddof=1)[0, 1]
+        beta = cov / var_control
+        
+        # Known value for European option (use Black-Scholes)
+        bs_engine = BlackScholesEngine()
+        european_expected = bs_engine.price(european_contract).price
+        
+        return payoffs + beta * (european_payoffs - european_expected)    
+
+    def _american_antithetic_payoffs(self, contract: OptionContract) -> np.ndarray:
+        """American payoffs using antithetic variates with Longstaff-Schwartz."""
+        # Generate antithetic path pairs
+        paths1, paths2 = self._generate_antithetic_full_paths(contract)
+        
+        # Apply LS to both sets
+        payoffs1 = self._longstaff_schwartz_exercise(contract, paths1)
+        payoffs2 = self._longstaff_schwartz_exercise(contract, paths2)
+        
+        # Return average
+        return 0.5 * (payoffs1 + payoffs2)
+    
+    def _generate_antithetic_full_paths(self, contract: OptionContract) -> tuple[np.ndarray, np.ndarray]:
+        """Generate paired antithetic full paths for American options."""
+        half_paths = self.n_paths // 2
+        
+        # Generate random numbers for half the paths
+        rng = np.random.default_rng(self.seed)
+        Z = rng.normal(size=(half_paths, self.n_steps))
+        
+        paths1 = self._simulate_gbm_full_paths_with_randoms(contract, Z)
+        paths2 = self._simulate_gbm_full_paths_with_randoms(contract, -Z)
+        
+        # Handle odd n_paths by concatenating one extra path
+        if 2 * half_paths < self.n_paths:
+            extra_Z = rng.normal(size=(1, self.n_steps))
+            extra_path = self._simulate_gbm_full_paths_with_randoms(contract, extra_Z)
+            paths1 = np.vstack([paths1, extra_path])
+        
+        return paths1, paths2
 
 
     def _generate_plain_terminal_prices(self, contract: OptionContract) -> np.ndarray:
@@ -281,6 +336,19 @@ class MonteCarloEngine(PricingEngine):
         terminal_prices = contract.spot * np.exp(log_prices[:, -1])
         return terminal_prices
 
+    def _simulate_gbm_full_paths_with_randoms(self, contract: OptionContract, Z: np.ndarray) -> np.ndarray:
+        """Simulate GBM full paths using provided random numbers."""
+        n_paths, n_steps = Z.shape
+        dt = contract.time_to_expiry / n_steps
+        paths = np.zeros((n_paths, n_steps + 1))
+        paths[:, 0] = contract.spot
+        drift_term = (contract.risk_free_rate - 0.5 * contract.volatility**2) * dt
+        vol_term = contract.volatility * np.sqrt(dt)
+        log_increments = drift_term + vol_term * Z
+        log_prices = np.cumsum(log_increments, axis=1)
+        paths[:, 1:] = contract.spot * np.exp(log_prices)
+        
+        return paths
 
     def _apply_control_variates_on_price(self, contract: OptionContract, payoffs: np.ndarray, final_prices: np.ndarray) -> np.ndarray:
         """
