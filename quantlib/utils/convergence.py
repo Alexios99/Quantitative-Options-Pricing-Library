@@ -226,3 +226,93 @@ def run_pde_convergence_study(contract: OptionContract,
             'psor_params': psor_params.__dict__
         }
     )
+
+def run_monte_carlo_study(contract: OptionContract, path_counts: Iterable[int] = None, n_steps: int = 50, variance_reduction: str = None, n_trials: int = 5, ref=None) -> ConvergenceReport:
+    """Run Monte Carlo convergence study based on number of paths
+    
+    Args:
+        contract: Option contract to price
+        path_counts: List of path counts to test
+        n_steps: Fixed number of time steps
+        variance_reduction: "antithetic", "control", or None
+        n_trials: Number of independent runs per path count (for confidence)
+        ref: Reference price (uses analytical if None)
+    """
+    from quantlib.pricing.monte_carlo import MonteCarloEngine
+    
+    if path_counts is None:
+        path_counts = [1000, 2000, 5000, 10000, 20000, 50000]
+    
+    ref_price = ref if ref is not None else reference_price(contract)
+    rows = []
+    
+    for n_paths in path_counts:
+        # Run multiple trials for statistical analysis
+        trial_prices = []
+        trial_times = []
+        
+        for trial in range(n_trials):
+            engine = MonteCarloEngine(
+                n_steps=n_steps, 
+                n_paths=n_paths, 
+                variance_reduction=variance_reduction,
+                seed=42 + trial  # Different seed per trial
+            )
+            
+            t0 = time.perf_counter()
+            result = engine.price(contract)
+            dt = (time.perf_counter() - t0) * 1000.0
+            
+            trial_prices.append(result.price)
+            trial_times.append(dt)
+        
+        # Statistics across trials
+        mean_price = np.mean(trial_prices)
+        std_price = np.std(trial_prices, ddof=1)
+        mean_time = np.mean(trial_times)
+        
+        # Theoretical standard error for MC
+        theoretical_se = std_price / np.sqrt(n_paths)
+        
+        rows.append(dict(
+            N=n_paths,
+            price=mean_price,
+            price_std=std_price,
+            theoretical_se=theoretical_se,
+            abs_err=abs(mean_price - ref_price),
+            rel_err=abs((mean_price - ref_price) / ref_price) if ref_price else np.nan,
+            ms=mean_time
+        ))
+    
+    df = pd.DataFrame(rows).sort_values("N").reset_index(drop=True)
+    
+    # MC convergence should be O(N^{-1/2})
+    order = estimate_order(df.N, df.abs_err.replace(0, np.nan).ffill())
+    
+    # No odd-even gap for MC
+    odd_even_gap = 0.0
+    
+    # No Richardson for basic MC
+    richardson_gain = None
+    
+    # MC-specific passing criteria
+    passed = bool(
+        (df.abs_err.iloc[-1] < 1e-2) and  # Looser tolerance for MC
+        (0.4 <= order <= 0.6)            # Should be ≈ O(N^{-1/2})
+    )
+    
+    return ConvergenceReport(
+        df=df,
+        reference_price=ref_price,
+        order_estimate=order,
+        odd_even_gap=odd_even_gap,
+        richardson_gain=richardson_gain,
+        passed=passed,
+        meta=dict(
+            engine="MonteCarloEngine",
+            grid=list(path_counts),
+            n_steps=n_steps,
+            variance_reduction=variance_reduction,
+            n_trials=n_trials
+        )
+    )

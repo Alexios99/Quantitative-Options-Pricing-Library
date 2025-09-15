@@ -24,8 +24,12 @@ class MonteCarloEngine(PricingEngine):
 
     def price(self, contract: OptionContract) -> MonteCarloPricingResult:
         payoffs = self._generate_payoffs(contract)
-        df = np.exp(-contract.risk_free_rate * contract.time_to_expiry)
-        discounted = payoffs * df
+        payoffs = self._generate_payoffs(contract)
+        if contract.style == ExerciseStyle.EUROPEAN:
+            discounted = payoffs * np.exp(-contract.risk_free_rate * contract.time_to_expiry)
+        else:  
+            discounted = payoffs
+
         mean_price, std_error, ci_half_width = self._calculate_statistics(discounted)
 
         return MonteCarloPricingResult(
@@ -197,7 +201,7 @@ class MonteCarloEngine(PricingEngine):
         option_values = np.zeros_like(paths)
         option_values[:, -1] = self._payoff_from_terminal(contract, paths[:, -1])
 
-        for t in range(n_time_steps - 2, 0, -1):
+        for t in range(n_time_steps - 2, -1, -1):
             current_spot_prices = paths[:, t]
             
             immediate_exercise_value = self._payoff_from_terminal(contract, current_spot_prices)
@@ -229,7 +233,7 @@ class MonteCarloEngine(PricingEngine):
             otm_mask = ~in_the_money
             option_values[otm_mask, t] = option_values[otm_mask, t+1] * np.exp(-contract.risk_free_rate * dt)
 
-        return option_values[:, 1]
+        return option_values[:, 0]
 
     def _apply_american_control_variates(self, contract: OptionContract, payoffs: np.ndarray, paths: np.ndarray) -> np.ndarray:
         """Apply control variates to American option payoffs (simplified approach)."""

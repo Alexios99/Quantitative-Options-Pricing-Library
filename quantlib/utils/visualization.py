@@ -413,25 +413,25 @@ def plot_pde_convergence(report: PDEConvergenceReport, save_path: Optional[str] 
     
     stats_text = f"""PDE CONVERGENCE ANALYSIS
 
-Reference Price: {report.reference_price:.6f}
+    Reference Price: {report.reference_price:.6f}
 
-SPATIAL CONVERGENCE:
-Final Error: {final_spatial_bp:.2f} bp
-Order Estimate: {report.spatial_order:.3f}
-Expected: ~2.0 (O(h²))
+    SPATIAL CONVERGENCE:
+    Final Error: {final_spatial_bp:.2f} bp
+    Order Estimate: {report.spatial_order:.3f}
+    Expected: ~2.0 (O(h²))
 
-TEMPORAL CONVERGENCE:
-Final Error: {final_temporal_bp:.2f} bp
-Order Estimate: {report.temporal_order:.3f}
-Expected: ~1.0 (O(Δt)) for θ={report.meta['theta']}
+    TEMPORAL CONVERGENCE:
+    Final Error: {final_temporal_bp:.2f} bp
+    Order Estimate: {report.temporal_order:.3f}
+    Expected: ~1.0 (O(Δt)) for θ={report.meta['theta']}
 
-GRID PARAMETERS:
-S_max: {report.meta['s_max']}
-Theta: {report.meta['theta']} ({'Crank-Nicolson' if report.meta['theta'] == 0.5 else 'Implicit' if report.meta['theta'] == 1.0 else 'Mixed'})
+    GRID PARAMETERS:
+    S_max: {report.meta['s_max']}
+    Theta: {report.meta['theta']} ({'Crank-Nicolson' if report.meta['theta'] == 0.5 else 'Implicit' if report.meta['theta'] == 1.0 else 'Mixed'})
 
-Status: {status}
+    Status: {status}
 
-bp = 1e4 × |P_PDE - P_ref| / P_ref"""
+    bp = 1e4 × |P_PDE - P_ref| / P_ref"""
     
     ax4.text(0.05, 0.95, stats_text, transform=ax4.transAxes, 
              fontsize=10, verticalalignment='top', fontfamily='monospace',
@@ -578,24 +578,24 @@ def compare_methods_convergence(contract, tree_ns=None, pde_spatial=None, pde_te
     
     summary_text = f"""METHOD COMPARISON SUMMARY
 
-Reference Price: {ref_price:.6f}
+    Reference Price: {ref_price:.6f}
 
-BINOMIAL TREE:
-Final Error: {tree_errors.iloc[-1]:.2f} bp
-Order: {tree_report.order_estimate:.3f}
-Max N: {tree_report.df['N'].iloc[-1]}
+    BINOMIAL TREE:
+    Final Error: {tree_errors.iloc[-1]:.2f} bp
+    Order: {tree_report.order_estimate:.3f}
+    Max N: {tree_report.df['N'].iloc[-1]}
 
-PDE METHOD:
-Spatial Error: {pde_spatial_errors.iloc[-1]:.2f} bp
-Temporal Error: {pde_temporal_errors.iloc[-1]:.2f} bp
-Spatial Order: {pde_report.spatial_order:.3f}
-Temporal Order: {pde_report.temporal_order:.3f}
+    PDE METHOD:
+    Spatial Error: {pde_spatial_errors.iloc[-1]:.2f} bp
+    Temporal Error: {pde_temporal_errors.iloc[-1]:.2f} bp
+    Spatial Order: {pde_report.spatial_order:.3f}
+    Temporal Order: {pde_report.temporal_order:.3f}
 
-PERFORMANCE:
-Tree passed: {tree_report.passed}
-PDE passed: {pde_report.passed}
+    PERFORMANCE:
+    Tree passed: {tree_report.passed}
+    PDE passed: {pde_report.passed}
 
-bp = 1e4 × |P_num - P_ref| / P_ref"""
+    bp = 1e4 × |P_num - P_ref| / P_ref"""
     
     ax4.text(0.05, 0.95, summary_text, transform=ax4.transAxes, 
              fontsize=10, verticalalignment='top', fontfamily='monospace',
@@ -610,3 +610,227 @@ bp = 1e4 × |P_num - P_ref| / P_ref"""
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     
     return fig, (ax1, ax2, ax3, ax4), tree_report, pde_report
+
+
+def plot_monte_carlo_convergence(report: ConvergenceReport, save_path: Optional[str] = None):
+    """Plot Monte Carlo convergence with statistical error bars"""
+    
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+    
+    paths = report.df['N'].values
+    abs_errors = report.df['abs_err'].values
+    bp_errors = (abs_errors / report.reference_price) * 10000
+    
+    # Error bars if available
+    error_bars = None
+    if 'price_std' in report.df.columns:
+        price_stds = report.df['price_std'].values
+        error_bars = (price_stds / report.reference_price) * 10000
+    
+    # Linear convergence with error bars
+    if error_bars is not None:
+        ax1.errorbar(paths, bp_errors, yerr=error_bars, fmt='o-', 
+                     linewidth=2, markersize=6, color='steelblue', 
+                     capsize=5, label='MC Error ± 1σ')
+    else:
+        ax1.plot(paths, bp_errors, 'o-', linewidth=2, markersize=6, 
+                 color='steelblue', label='MC Error')
+    
+    ax1.set_xlabel('Number of Paths')
+    ax1.set_ylabel('Absolute Error (basis points)')
+    ax1.set_title('Monte Carlo Convergence')
+    ax1.grid(True, alpha=0.3)
+    ax1.legend()
+    
+    # Log-log with theoretical O(N^{-1/2}) line
+    ax2.loglog(paths, bp_errors, 'o-', linewidth=2, markersize=6, 
+               color='steelblue', label='MC Error')
+    
+    if len(paths) >= 2:
+        # Theoretical O(N^{-1/2}) reference line
+        theoretical_slope = -0.5
+        ref_error = bp_errors[0]
+        ref_paths = paths[0]
+        theoretical_errors = ref_error * (paths / ref_paths) ** theoretical_slope
+        
+        ax2.loglog(paths, theoretical_errors, '--', color='red', alpha=0.7, 
+                   label='Theoretical O(N^{-1/2})')
+        
+        # Fitted line
+        log_paths = np.log(paths)
+        log_errors = np.log(bp_errors)
+        slope, intercept = np.polyfit(log_paths, log_errors, 1)
+        fitted_errors = np.exp(intercept) * (paths ** slope)
+        ax2.loglog(paths, fitted_errors, ':', color='gray', alpha=0.7, 
+                   label=f'Fitted O(N^{slope:.2f})')
+    
+    ax2.set_xlabel('Number of Paths')
+    ax2.set_ylabel('Error (basis points)')
+    ax2.set_title('Log-Log MC Convergence')
+    ax2.grid(True, alpha=0.3)
+    ax2.legend()
+    
+    # Standard error comparison
+    if 'theoretical_se' in report.df.columns:
+        empirical_se = error_bars if error_bars is not None else np.zeros_like(paths)
+        theoretical_se = (report.df['theoretical_se'] / report.reference_price) * 10000
+        
+        ax3.plot(paths, empirical_se, 'o-', color='steelblue', label='Empirical SE')
+        ax3.plot(paths, theoretical_se, 's--', color='darkred', label='Theoretical SE')
+        ax3.set_xlabel('Number of Paths')
+        ax3.set_ylabel('Standard Error (basis points)')
+        ax3.set_title('Standard Error Comparison')
+        ax3.grid(True, alpha=0.3)
+        ax3.legend()
+    else:
+        ax3.axis('off')
+    
+    # Statistics
+    ax4.axis('off')
+    
+    final_error_bp = bp_errors[-1]
+    status = "PASSED" if report.passed else "FAILED"
+    status_color = "lightgreen" if report.passed else "lightcoral"
+    
+    stats_text = f"""MONTE CARLO CONVERGENCE
+
+    Reference Price: {report.reference_price:.6f}
+    Final Error: {final_error_bp:.2f} bp
+    Order Estimate: {report.order_estimate:.3f}
+    Expected: ~0.5 (O(N^{{-1/2}}))
+
+    PARAMETERS:
+    Time Steps: {report.meta['n_steps']}
+    Variance Reduction: {report.meta['variance_reduction'] or 'None'}
+    Trials per Point: {report.meta['n_trials']}
+    Max Paths: {max(report.meta['grid']):,}
+
+    Status: {status}
+
+    bp = 1e4 × |P_MC - P_ref| / P_ref"""
+    
+    ax4.text(0.05, 0.95, stats_text, transform=ax4.transAxes, 
+             fontsize=10, verticalalignment='top', fontfamily='monospace',
+             bbox=dict(boxstyle='round,pad=1', facecolor=status_color, alpha=0.8))
+    
+    variance_reduction = report.meta['variance_reduction'] or 'Plain'
+    fig.suptitle(f'Monte Carlo Convergence Analysis\n{variance_reduction} MC | Reference: {report.reference_price:.4f}', 
+                 fontsize=16, y=0.95)
+    
+    plt.tight_layout(rect=[0, 0.03, 1, 0.92])
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    return fig, (ax1, ax2, ax3, ax4)
+
+def compare_monte_carlo_methods(contract, path_counts=None, save_path: Optional[str] = None):
+    """Compare different Monte Carlo variance reduction methods"""
+    
+    if path_counts is None:
+        path_counts = [1000, 2000, 5000, 10000, 20000]
+    
+    from quantlib.utils.convergence import run_monte_carlo_study
+    
+    # Run studies for different methods
+    plain_report = run_monte_carlo_study(contract, path_counts, variance_reduction=None)
+    antithetic_report = run_monte_carlo_study(contract, path_counts, variance_reduction="antithetic")
+    
+    # Try control variates (may not be implemented for American options)
+    try:
+        control_report = run_monte_carlo_study(contract, path_counts, variance_reduction="control")
+        has_control = True
+    except (NotImplementedError, AttributeError):
+        has_control = False
+    
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+    
+    # Error comparison
+    ref_price = plain_report.reference_price
+    
+    plain_errors = (plain_report.df['abs_err'] / ref_price) * 10000
+    antithetic_errors = (antithetic_report.df['abs_err'] / ref_price) * 10000
+    
+    ax1.plot(path_counts, plain_errors, 'o-', color='blue', label='Plain MC')
+    ax1.plot(path_counts, antithetic_errors, 's-', color='green', label='Antithetic Variates')
+    
+    if has_control:
+        control_errors = (control_report.df['abs_err'] / ref_price) * 10000
+        ax1.plot(path_counts, control_errors, '^-', color='red', label='Control Variates')
+    
+    ax1.set_xlabel('Number of Paths')
+    ax1.set_ylabel('Error (basis points)')
+    ax1.set_title('Variance Reduction Comparison')
+    ax1.grid(True, alpha=0.3)
+    ax1.legend()
+    
+    # Log-log comparison
+    ax2.loglog(path_counts, plain_errors, 'o-', color='blue', label='Plain MC')
+    ax2.loglog(path_counts, antithetic_errors, 's-', color='green', label='Antithetic')
+    
+    if has_control:
+        ax2.loglog(path_counts, control_errors, '^-', color='red', label='Control')
+    
+    # Theoretical line
+    theoretical = plain_errors[0] * (np.array(path_counts) / path_counts[0]) ** (-0.5)
+    ax2.loglog(path_counts, theoretical, '--', color='gray', alpha=0.7, label='O(N^{-1/2})')
+    
+    ax2.set_xlabel('Number of Paths')
+    ax2.set_ylabel('Error (basis points)')
+    ax2.set_title('Log-Log Comparison')
+    ax2.grid(True, alpha=0.3)
+    ax2.legend()
+    
+    # Variance reduction efficiency
+    efficiency_ratio = plain_errors / antithetic_errors
+    ax3.plot(path_counts, efficiency_ratio, 'o-', color='green', label='Plain/Antithetic Ratio')
+    ax3.axhline(y=np.sqrt(2), color='red', linestyle='--', alpha=0.7, label='Theoretical √2')
+    ax3.set_xlabel('Number of Paths')
+    ax3.set_ylabel('Error Reduction Ratio')
+    ax3.set_title('Antithetic Efficiency')
+    ax3.grid(True, alpha=0.3)
+    ax3.legend()
+    
+    # Statistics
+    ax4.axis('off')
+    
+    final_plain = plain_errors.iloc[-1]
+    final_antithetic = antithetic_errors.iloc[-1]
+    improvement = final_plain / final_antithetic
+    
+    stats_text = f"""VARIANCE REDUCTION COMPARISON
+
+    Reference Price: {ref_price:.6f}
+
+    FINAL ERRORS (at {path_counts[-1]:,} paths):
+    Plain MC: {final_plain:.2f} bp
+    Antithetic: {final_antithetic:.2f} bp
+    Improvement: {improvement:.2f}x
+
+    CONVERGENCE ORDERS:
+    Plain: {plain_report.order_estimate:.3f}
+    Antithetic: {antithetic_report.order_estimate:.3f}"""
+
+    if has_control:
+        final_control = control_errors.iloc[-1]
+        control_improvement = final_plain / final_control
+        stats_text += f"""
+    Control: {final_control:.2f} bp
+    Control Improvement: {control_improvement:.2f}x
+    Control Order: {control_report.order_estimate:.3f}"""
+    
+    stats_text += f"\n\nbp = 1e4 × |P_MC - P_ref| / P_ref"
+    
+    ax4.text(0.05, 0.95, stats_text, transform=ax4.transAxes, 
+             fontsize=10, verticalalignment='top', fontfamily='monospace',
+             bbox=dict(boxstyle='round,pad=1', facecolor='lightblue', alpha=0.8))
+    
+    fig.suptitle(f'Monte Carlo Variance Reduction Comparison\n{contract.option.value.title()} Option', 
+                 fontsize=16, y=0.95)
+    
+    plt.tight_layout(rect=[0, 0.03, 1, 0.92])
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    return fig, (ax1, ax2, ax3, ax4)

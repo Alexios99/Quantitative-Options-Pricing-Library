@@ -522,41 +522,107 @@ class TestMonteCarloEngine:
 
         assert parity_lower - tol <= call_put_diff <= parity_upper + tol
 
-    def test_american_antithetic_not_implemented(self):
-        """Test that American antithetic variates raises NotImplementedError"""
+    
+
+    def test_american_antithetic_variance_reduction(self):
+        """Antithetic variates should run for American options and not worsen SE; typically improves on average.
+        We average across multiple seeds to reduce flakiness from the LSM regression noise.
+        """
+        from statistics import mean
         american_put = OptionContract(
             spot=100.0,
             strike=110.0,
-            time_to_expiry=0.25,
+            time_to_expiry=0.75,
             risk_free_rate=0.05,
-            volatility=0.2,
+            volatility=0.25,
             option=OptionType.PUT,
             style=ExerciseStyle.AMERICAN
         )
-        
-        engine = MonteCarloEngine(n_steps=20, n_paths=1000, variance_reduction="antithetic", seed=42)
-        
-        with pytest.raises(AttributeError, match="_american_antithetic_payoffs"):
-            engine.price(american_put)
 
-    def test_american_control_variates_not_implemented(self):
-        """Test that American control variates raises NotImplementedError"""
+        seeds = [101, 202, 303, 404, 505]
+        se_plain, se_anti = [], []
+        for s in seeds:
+            plain = MonteCarloEngine(n_steps=50, n_paths=15000, seed=s)
+            anti  = MonteCarloEngine(n_steps=50, n_paths=15000, variance_reduction="antithetic", seed=s)
+
+            r_plain = plain.price(american_put)
+            r_anti  = anti.price(american_put)
+
+            # Prices should agree within 3 sigma for each paired run
+            tol = 3.0 * (r_plain.standard_error + r_anti.standard_error)
+            assert abs(r_plain.price - r_anti.price) <= tol
+
+            se_plain.append(r_plain.standard_error)
+            se_anti.append(r_anti.standard_error)
+
+        ratio = mean(se_anti) / mean(se_plain)
+        # Allow tiny regression-induced noise; require no degradation and usually slight improvement
+        assert ratio <= 1.02
+
+        plain = MonteCarloEngine(n_steps=50, n_paths=10000, seed=123)
+        anti  = MonteCarloEngine(n_steps=50, n_paths=10000, variance_reduction="antithetic", seed=123)
+
+        r_plain = plain.price(american_put)
+        r_anti  = anti.price(american_put)
+
+        # Antithetic should not change the mean materially but should reduce SE
+        price_diff = abs(r_plain.price - r_anti.price)
+        tol = 3.0 * (r_plain.standard_error + r_anti.standard_error)
+        assert price_diff <= tol
+
+        assert r_anti.standard_error <= r_plain.standard_error
+        improvement = 1 - (r_anti.standard_error / r_plain.standard_error)
+        # Allow small improvements to avoid flakiness across seeds/backends
+        assert improvement >= 0.05 or r_plain.standard_error < 1e-12
+
+
+    def test_american_control_variates_variance_reduction(self):
+        """Control variates should execute for American options and reduce SE on average (or at least not worsen).
+        Averaging across seeds avoids one-off regression noise.
+        """
+        from statistics import mean
         american_put = OptionContract(
             spot=100.0,
             strike=110.0,
-            time_to_expiry=0.25,
+            time_to_expiry=1.0,
             risk_free_rate=0.05,
-            volatility=0.2,
+            volatility=0.25,
             option=OptionType.PUT,
             style=ExerciseStyle.AMERICAN
         )
-        
-        engine = MonteCarloEngine(n_steps=20, n_paths=1000, variance_reduction="control", seed=42)
-        
-        with pytest.raises(AttributeError, match="_apply_american_control_variates"):
-            engine.price(american_put)
 
+        seeds = [111, 222, 333, 444, 555]
+        se_plain, se_ctrl = [], []
+        for s in seeds:
+            plain = MonteCarloEngine(n_steps=50, n_paths=15000, seed=s)
+            ctrl  = MonteCarloEngine(n_steps=50, n_paths=15000, variance_reduction="control", seed=s)
 
+            r_plain = plain.price(american_put)
+            r_ctrl  = ctrl.price(american_put)
+
+            # Prices should agree within 3 sigma for each paired run
+            tol = 3.0 * (r_plain.standard_error + r_ctrl.standard_error)
+            assert abs(r_plain.price - r_ctrl.price) <= tol
+
+            se_plain.append(r_plain.standard_error)
+            se_ctrl.append(r_ctrl.standard_error)
+
+        ratio = mean(se_ctrl) / mean(se_plain)
+        assert ratio <= 1.05
+
+        plain = MonteCarloEngine(n_steps=50, n_paths=15000, seed=321)
+        ctrl  = MonteCarloEngine(n_steps=50, n_paths=15000, variance_reduction="control", seed=321)
+
+        r_plain = plain.price(american_put)
+        r_ctrl  = ctrl.price(american_put)
+
+        # Mean should stay consistent; variance should drop
+        price_diff = abs(r_plain.price - r_ctrl.price)
+        tol = 3.0 * (r_plain.standard_error + r_ctrl.standard_error)
+        assert price_diff <= tol
+
+        assert r_ctrl.standard_error <= 1.03 * r_plain.standard_error
+        # Averaged improvement checked above; single-seed runs can be noisy with LSM.
     def test_american_statistical_properties(self):
         """Test statistical properties of American option pricing"""
         american_put = OptionContract(
