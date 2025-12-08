@@ -1,0 +1,36 @@
+Metadata-Version: 2.1
+Name: quantlib
+Version: 0.1.0
+Summary: Production-quality options pricing library
+Author: Your Name
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.24
+Requires-Dist: scipy>=1.10
+Requires-Dist: numba>=0.57
+Requires-Dist: pandas>=2.0
+Requires-Dist: matplotlib>=3.5
+Requires-Dist: plotly>=5.0
+
+# Quantitative Options Pricing Library
+Production-quality Python library for options pricing and risk management.
+
+## Installation
+```bash
+pip install -e .
+```
+
+## Quick Start
+```python
+from quantlib.core.payoffs import OptionContract
+from quantlib.pricing.analytical import BlackScholesEngine
+
+# Create option contract
+option = OptionContract(spot=100, strike=100, time_to_expiry=1.0,
+                       risk_free_rate=0.05, volatility=0.2)
+
+# Price using Black-Scholes
+engine = BlackScholesEngine()
+result = engine.price(option)
+print(f'Option price: {result.value:.4f}')
+```
