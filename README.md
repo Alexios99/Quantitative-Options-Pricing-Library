@@ -21,10 +21,11 @@ A production-quality Python library for advanced options pricing, risk managemen
 ## Visuals
 
 ### Monte Carlo Convergence
-![Monte Carlo Convergence](assets/mc_convergence.png)
-*Convergence of Monte Carlo simulations showing standard error reduction.*
+![Monte Carlo Variance Reduciton Comaprison](assets/mc_variance_reduction.png)
+*Convergence of Monte Carlo simulations showing variance reduction techniques.*
 
 ![SABR Calibration](assets/sabr_smile_fit.png)
+*Calibration of SABR model to market smile.*
 
 ### Hedging Simulation
 ![Hedging Simulation](assets/hedging_simulation.png)
