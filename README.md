@@ -15,7 +15,7 @@ A production-quality Python library for advanced options pricing, risk managemen
     *   **Finite Difference**: FDA and Crank-Nicolson solvers for American and Exotic options.
     *   **Binomial Trees**: CRR and JR models for lattice-based pricing.
 *   **Risk Management**: Full suite of Greeks (Delta, Gamma, Vega, Theta, Rho) calculation.
-*   **Performance**: Optimize numerical methods using `numba` for high-performance computing.
+*   **Dynamic Delta Hedging**: Simulate hedging strategies under geometric Brownian motion to analyze PnL attribution, "Gamma Bleeding", and hedge effectiveness across different rebalancing frequencies.H
 *   **Visualization**: Built-in plotting tools for payoff diagrams, convergence analysis, and hedging simulations.
 
 ## Visuals
