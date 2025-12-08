@@ -172,9 +172,14 @@ def run_pde_convergence_study(contract: OptionContract,
     
     # Study temporal convergence (fix spatial)
     temporal_results = []
+    
+    # Use high spatial resolution to isolate temporal error
+    # Use at least 500, or 2x the largest requested spatial size
+    fixed_n_space = max(500, max(spatial_sizes) * 2)
+    
     for n_time in temporal_sizes:
         grid_params = SimpleNamespace(
-            n_space=200,  # Fixed high resolution
+            n_space=fixed_n_space,
             n_time=n_time,
             s_max=s_max,
             theta=theta

@@ -48,8 +48,10 @@ class HestonPricingEngine:
               option_type: str = "call") -> float:
         """Heston pricing using P1 and P2 probabilities"""
         # Calculate the two probability integrals
+        # P1 corresponds to the delta term (measure change -> shift by -i), so j=1
         P1 = self._probability_integral(spot, strike, time_to_expiry, 
                                        risk_free_rate, params, j=0)
+        # P2 corresponds to the risk-neutral probability, so j=0
         P2 = self._probability_integral(spot, strike, time_to_expiry, 
                                        risk_free_rate, params, j=1)
         
@@ -77,12 +79,15 @@ class HestonPricingEngine:
         
         def objective(vol):
             contract = OptionContract(
-                option_type=OptionType.CALL,
+                option=OptionType.CALL,
                 strike=strike,
-                expiry=time_to_expiry,
-                exercise_style=ExerciseStyle.EUROPEAN
+                time_to_expiry=time_to_expiry,
+                spot=spot,
+                risk_free_rate=risk_free_rate,
+                volatility=vol,
+                style=ExerciseStyle.EUROPEAN
             )
-            bs_price = bs_engine.price(contract, spot, vol, risk_free_rate)
+            bs_price = bs_engine.price(contract).price
             return bs_price - heston_price
         
         try:
@@ -101,8 +106,8 @@ class HestonPricingEngine:
                        params.sigma**2 * (1j * u + u**2))
         
         # Calculate g factor
-        numerator = params.kappa - params.rho * params.sigma * 1j * u + d
-        denominator = params.kappa - params.rho * params.sigma * 1j * u - d
+        numerator = params.kappa - params.rho * params.sigma * 1j * u - d
+        denominator = params.kappa - params.rho * params.sigma * 1j * u + d
         g = numerator / denominator
         
         # Calculate D(u,T)
@@ -132,8 +137,9 @@ class HestonPricingEngine:
             result, _ = quad(integrand, 0, self.integration_limit, 
                             epsabs=1e-8, limit=1000)
             return 0.5 + result / np.pi
-        except:
+        except Exception as e:
             # Fallback for numerical issues
+            print(f"DEBUG: Integration failed for j={j}. Error: {e}")
             return 0.5 if j == 1 else 0.5
     
     def _integrand(self, phi: float, spot: float, strike: float,
@@ -145,7 +151,7 @@ class HestonPricingEngine:
         
         # Calculate characteristic function at (phi - i*j)
         u = phi - 1j * j
-        cf = self._characteristic_function(u, spot, strike, time_to_expiry, risk_free_rate, params)
+        cf = self._characteristic_function(u, spot, time_to_expiry, risk_free_rate, params)
         
         # Calculate integrand: Re[exp(-i*phi*ln(K)) * CF] / phi
         integrand_complex = cmath.exp(-1j * phi * np.log(strike)) * cf / (1j * phi)

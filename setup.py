@@ -13,7 +13,7 @@ setup(
         'plotly>=5.0',
     ],
     python_requires='>=3.8',
-    author='Your Name',
+    author='Alexios Philalithis',
     description='Production-quality options pricing library',
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
