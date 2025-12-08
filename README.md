@@ -4,19 +4,44 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-A production-quality Python library for advanced options pricing, risk management, and quantitative analysis. This library implements various pricing engines including Analytical (Black-Scholes), Monte Carlo simulations, and Finite Difference methods, along with comprehensive Greeks calculation and hedging capabilities.
+An algorithmic options pricing system engineered in Python, designed to handle complex derivatives modeling and risk management. This library implements industry-standard numerical methods including Crank-Nicolson Finite Difference schemes, Monte Carlo simulations with variance reduction, and stochastic volatility calibration.
 
-## Key Features
+It serves as a comprehensive toolkit for quantitative analysts, offering robust solvers for both European and American option pricing, along with a full suite of Greek calculations for dynamic hedging strategies.
 
-*   **Pricing Engines**:
-    *   **Analytical**: Black-Scholes-Merton framework for European options.
-    *   **Monte Carlo**: Robust simulation engine with variance reduction techniques (Antithetic Variates, Control Variates).
-    *   **SABR & Heston**: Stochastic volatility pricing engines with calibration capabilities.
-    *   **Finite Difference**: FDA and Crank-Nicolson solvers for American and Exotic options.
-    *   **Binomial Trees**: CRR and JR models for lattice-based pricing.
-*   **Risk Management**: Full suite of Greeks (Delta, Gamma, Vega, Theta, Rho) calculation.
-*   **Performance**: Optimize numerical methods using `numba` for high-performance computing.
-*   **Visualization**: Built-in plotting tools for payoff diagrams, convergence analysis, and hedging simulations.
+## Key Features & Technical Implementation
+*   **Analytical**: Black-Scholes-Merton framework for European options.
+### Advanced Pricing Engines
+*   **Finite Difference Methods (PDE):**
+    *   Implemented **Crank-Nicolson** time-stepping scheme for unconditional stability and second-order accuracy.
+    *   Utilized **Projected Successive Over-Relaxation (PSOR)** to handle the early exercise boundary of American options.
+    *   Features sparse matrix operations for optimized grid solving performance.
+*   **Monte Carlo Simulations:**
+    *   Engineered a high-performance simulation engine supporting **Antithetic Variates** and **Control Variates** for significant variance reduction.
+    *   Implemented **Longstaff-Schwartz** Least Squares Monte Carlo (LSM) algorithm for pricing American options via regression-based continuation value estimation.
+    *   Supports pathwise delta calculation for efficient Greek sensitivity analysis.
+*   **Tree Methods:**
+    *   Binomial (CRR, Jarrow-Rudd) and Trinomial lattice models for fast approximation of American exercises.
+
+### Stochastic Volatility & Calibration
+*   **SABR Model:**
+    *   Full implementation of the **Hagan (2002)** asymptotic approximation formula.
+    *   Includes a robust calibration engine using `scipy.optimize.minimize` (L-BFGS-B) to fit model parameters ($\alpha, \beta, \rho, \nu$) to market volatility smiles.
+*   **Heston Model:**
+    *   Semi-analytical pricing using Fourier integration of the characteristic function.
+    *   Capable of capturing rich volatility surface dynamics (skew and smile).
+
+### Quantitative Risk Management
+*   **Dynamic Greeks:**
+    *   Real-time calculation of first and second-order sensitivities: Delta ($\Delta$), Gamma ($\Gamma$), Vega ($\nu$), Theta ($\Theta$), and Rho ($\rho$).
+    *   Supports both analytical (Black-Scholes) and numerical differentiation (Finite Difference/Pathwise) for all engine types.
+*   **Delta Hedging Simulator:**
+    *   A complete backtesting environment to simulate delta-neutral portfolio management.
+    *   Tracks PnL attribution, hedge slippage, and "Gamma Bleeding" in discrete time rebalancing scenarios.
+
+### Software Engineering Excellence
+*   **Type Safety:** Fully typed codebase using Python `typing` module for rigorous static analysis.
+*   **Testing:** Comprehensive `pytest` suite ensuring numerical convergence and regression testing.
+*   **CI/CD:** GitHub Actions workflows for automated testing on every commit, ensuring production readiness.
 
 ## Visuals
 
