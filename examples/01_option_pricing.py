@@ -66,10 +66,10 @@ print(f"Price: {mc_result.price:.4f} +/- {mc_result.standard_error:.4f}")
 # 4. Binomial Tree (Cox-Ross-Rubinstein)
 # ==========================================
 # Useful for American options, but we test on European first for comparison
-tree_engine = BinomialTreeEngine(n_steps=500)
+tree_engine = BinomialTreeEngine(n_steps=5000)
 tree_result = tree_engine.price(european_call)
 
-print(f"\n[3] Binomial Tree (CRR, N=500)")
+print(f"\n[3] Binomial Tree (CRR, N=5000)")
 print(f"Price: {tree_result.price:.4f}")
 
 # ==========================================
@@ -116,5 +116,8 @@ solver_params = SimpleNamespace(
 pde_engine = PDEEngine(grid_params=grid_params, solver_params=solver_params)
 pde_result = pde_engine.price(american_put)
 
+pde_result_euro = pde_engine.price(european_call)
+
 print(f"\n[5] Finite Difference (PDE)")
 print(f"American Put Price: {pde_result.price:.4f}")
+print(f"Euro Call Price: {pde_result_euro.price:.4f}")
