@@ -1,11 +1,18 @@
 from quantlib.utils.market_data import OptionChain, MarketQuote
 from quantlib.pricing.analytical import BlackScholesEngine
-from quantlib.core.payoffs import OptionContract, ExerciseStyle
+from quantlib.core.payoffs import OptionContract, ExerciseStyle, OptionType
 from dataclasses import dataclass
 from scipy.optimize import brentq
+import logging
 import numpy as np
 from typing import List, Optional, Tuple, Dict
 from bisect import bisect_left
+
+logger = logging.getLogger(__name__)
+
+# Implied-vol root-finding bracket
+IV_SEARCH_MIN = 0.001
+IV_SEARCH_MAX = 5.0
 
 @dataclass
 class IVPoint:
@@ -13,19 +20,33 @@ class IVPoint:
     expiry: float
     iv: float
 
+class ImpliedVolatilityError(ValueError):
+    """No Black-Scholes implied volatility exists for a quote (or none in the search range)."""
+
+
 class VolatilitySurface:
     def __init__(self, spot_price: float, risk_free_rate: float):
         self.spot = spot_price
         self.risk_free_rate = risk_free_rate
         self.iv_surface = []
-    def add_chain(self, chain: OptionChain) -> None:
+        self.rejected: List[Tuple[MarketQuote, str]] = []  # (quote, reason) when skip_invalid=True
+
+    def add_chain(self, chain: OptionChain, skip_invalid: bool = False) -> None:
+        """Add the implied vol of every quote in the chain.
+
+        By default an invalid quote raises ImpliedVolatilityError. With skip_invalid=True it is
+        recorded in self.rejected with the reason (and logged) instead, and the rest are added.
+        """
         for quote in chain:
             try:
                 iv = self._calculate_iv(quote, self.spot, self.risk_free_rate)
-                if not np.isnan(iv) and 0.001 <= iv <= 5.0: 
-                    self.iv_surface.append(IVPoint(quote.strike, quote.time_to_expiry, iv))
-            except Exception as e:
-                pass
+            except ImpliedVolatilityError as exc:
+                if not skip_invalid:
+                    raise
+                self.rejected.append((quote, str(exc)))
+                logger.warning("Skipped quote: %s", exc)
+                continue
+            self.iv_surface.append(IVPoint(quote.strike, quote.time_to_expiry, iv))
 
 
     def get_iv(self, strike: float, expiry: float, method: str = "bilinear") -> float:
@@ -49,26 +70,40 @@ class VolatilitySurface:
         raise ValueError(f"Unknown interpolation method: {method}")
 
     def _calculate_iv(self, market_quote: MarketQuote, spot_price: float, risk_free_rate: float) -> float:
+        """Black-Scholes implied vol of the quote's mid price; raises ImpliedVolatilityError if none exists."""
         market_price = market_quote.mid
-        bs_engine = BlackScholesEngine()
-        def objective(vol):
-            contract = OptionContract(spot_price, market_quote.strike, market_quote.time_to_expiry, risk_free_rate, vol, market_quote.option, ExerciseStyle.EUROPEAN)
-            bs_result = bs_engine.price(contract)
-            bs_price = bs_result.price
-        
-            return bs_price - market_price
-        
-        vol_min = 0.001  
-        vol_max = 5  
+        strike, T = market_quote.strike, market_quote.time_to_expiry
+        label = f"{market_quote.symbol} {market_quote.option.value} K={strike} T={T} mid={market_price:.6g}"
 
+        if T <= 0:
+            raise ImpliedVolatilityError(f"{label}: no implied vol at or after expiry")
         if market_price <= 0:
-            raise ValueError(f"Market Price cannot be negative. Current Market Price: {market_price}") 
-        
-        
-        try:
-            return brentq(objective, vol_min, vol_max)
-        except (ValueError, RuntimeError):
-            return 0.2 #reasonable fallback if convergance fails
+            raise ImpliedVolatilityError(f"{label}: non-positive price")
+
+        # No-arbitrage bounds for a European option on a non-dividend stock; the BS price
+        # tends to the lower bound as vol -> 0 and to the upper bound as vol -> infinity.
+        disc_strike = strike * np.exp(-risk_free_rate * T)
+        if market_quote.option == OptionType.CALL:
+            lower, upper = max(spot_price - disc_strike, 0.0), spot_price
+        else:
+            lower, upper = max(disc_strike - spot_price, 0.0), disc_strike
+        if not lower < market_price < upper:
+            raise ImpliedVolatilityError(
+                f"{label}: price outside no-arbitrage bounds ({lower:.6g}, {upper:.6g})")
+
+        bs_engine = BlackScholesEngine()
+
+        def objective(vol):
+            contract = OptionContract(spot_price, strike, T, risk_free_rate, vol,
+                                      market_quote.option, ExerciseStyle.EUROPEAN)
+            return bs_engine.price(contract).price - market_price
+
+        low_diff, high_diff = objective(IV_SEARCH_MIN), objective(IV_SEARCH_MAX)
+        if low_diff > 0:
+            raise ImpliedVolatilityError(f"{label}: implied vol below search minimum {IV_SEARCH_MIN}")
+        if high_diff < 0:
+            raise ImpliedVolatilityError(f"{label}: implied vol above search maximum {IV_SEARCH_MAX}")
+        return brentq(objective, IV_SEARCH_MIN, IV_SEARCH_MAX, xtol=1e-12)
         
     
     def get_strikes(self) -> List[float]:
