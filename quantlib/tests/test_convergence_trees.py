@@ -7,7 +7,7 @@ from quantlib.utils.convergence import (
     run_study,
     estimate_order,
     reference_price,
-    UseEngineRichardson,
+    UseEngineSmoothing,
     ConvergenceReport,
 )
 from quantlib.core.payoffs import OptionContract, OptionType, ExerciseStyle
@@ -88,7 +88,7 @@ def american_put():
 class TestConvergenceStudies:
     def test_binomial_european_basic_convergence(self, european_call):
         grid = [25, 50, 100, 200]
-        report = run_study(european_call, BinomialTreeEngine, grid, UseEngineRichardson.OFF)
+        report = run_study(european_call, BinomialTreeEngine, grid, UseEngineSmoothing.OFF)
 
         # Structure/type checks
         assert isinstance(report, ConvergenceReport)
@@ -104,40 +104,40 @@ class TestConvergenceStudies:
         tail_bp = bp_error(errors[-1], report.reference_price)
         assert tail_bp < 50  # < 50 bp by N≈200 (tighten later if you wish)
 
-    def test_binomial_with_engine_richardson(self, european_call):
+    def test_binomial_with_engine_smoothing(self, european_call):
         grid = [20, 40, 80]
-        report = run_study(european_call, BinomialTreeEngine, grid, UseEngineRichardson.ON)
+        report = run_study(european_call, BinomialTreeEngine, grid, UseEngineSmoothing.ON)
 
-        # When engine uses internal Richardson, external RE should be disabled
-        assert report.richardson_gain is None
-        assert 'price_RE' in report.df.columns
-        assert report.df['price_RE'].isna().all()
+        # When the engine averages internally, the external average should be disabled
+        assert report.smoothing_gain is None
+        assert 'price_avg' in report.df.columns
+        assert report.df['price_avg'].isna().all()
 
-        # Expect at least binomial-like slope, often steeper with Richardson
+        # Expect at least binomial-like slope, often steeper with averaging
         assert report.order_estimate >= 0.5
 
-    def test_external_richardson_computation(self, european_call):
+    def test_external_odd_even_average_computation(self, european_call):
         grid = [20, 40, 80]
-        report = run_study(european_call, BinomialTreeEngine, grid, UseEngineRichardson.OFF)
+        report = run_study(european_call, BinomialTreeEngine, grid, UseEngineSmoothing.OFF)
 
-        # Convention: compute external RE for all but the last grid point
-        assert 'price_RE' in report.df.columns
-        assert report.df['price_RE'].notna().sum() == len(grid) - 1
-        assert pd.isna(report.df['price_RE'].iloc[-1])
+        # Convention: compute the external average for all but the last grid point
+        assert 'price_avg' in report.df.columns
+        assert report.df['price_avg'].notna().sum() == len(grid) - 1
+        assert pd.isna(report.df['price_avg'].iloc[-1])
 
-        # On the last row where RE exists, it should not be worse than raw
-        row = report.df.dropna(subset=['price_RE']).iloc[-1]
+        # On the last row where the average exists, it should not be worse than raw
+        row = report.df.dropna(subset=['price_avg']).iloc[-1]
         err_raw = abs(row['price'] - report.reference_price)
-        err_re = abs(row['price_RE'] - report.reference_price)
-        assert err_re <= err_raw + 1e-12
+        err_avg = abs(row['price_avg'] - report.reference_price)
+        assert err_avg <= err_raw + 1e-12
 
         # If a global gain was computed, it should be ≥ 1
-        if report.richardson_gain is not None:
-            assert report.richardson_gain >= 1.0
+        if report.smoothing_gain is not None:
+            assert report.smoothing_gain >= 1.0
 
     def test_odd_even_gap_computation(self, european_call):
         grid = [21, 22, 41, 42, 81, 82]  # mix parity
-        report = run_study(european_call, BinomialTreeEngine, grid, UseEngineRichardson.OFF)
+        report = run_study(european_call, BinomialTreeEngine, grid, UseEngineSmoothing.OFF)
 
         even_mean = report.df.loc[report.df.N % 2 == 0, 'abs_err'].mean()
         odd_mean = report.df.loc[report.df.N % 2 == 1, 'abs_err'].mean()
@@ -148,7 +148,7 @@ class TestConvergenceStudies:
     @pytest.mark.slow
     def test_trinomial_american_convergence(self, american_put):
         grid = [25, 50, 100, 200]
-        report = run_study(american_put, TrinomialTreeEngine, grid, UseEngineRichardson.OFF)
+        report = run_study(american_put, TrinomialTreeEngine, grid, UseEngineSmoothing.OFF)
 
         assert len(report.df) == len(grid)
         assert report.reference_price > 0
@@ -160,7 +160,7 @@ class TestConvergenceStudies:
 
     def test_convergence_report_structure(self, european_call):
         grid = [50, 100]
-        report = run_study(european_call, BinomialTreeEngine, grid, UseEngineRichardson.OFF)
+        report = run_study(european_call, BinomialTreeEngine, grid, UseEngineSmoothing.OFF)
 
         assert isinstance(report.df, pd.DataFrame)
         assert report.reference_price > 0
@@ -172,7 +172,7 @@ class TestConvergenceStudies:
 
     def test_performance_timing(self, european_call):
         grid = [50, 100]
-        report = run_study(european_call, BinomialTreeEngine, grid, UseEngineRichardson.OFF)
+        report = run_study(european_call, BinomialTreeEngine, grid, UseEngineSmoothing.OFF)
 
         timings = report.df['ms'].to_numpy()
         assert np.all(timings > 0)
@@ -188,12 +188,12 @@ class TestEdgeCases:
             risk_free_rate=0.05, volatility=0.2,
             option=OptionType.CALL, style=ExerciseStyle.EUROPEAN,
         )
-        report = run_study(contract, BinomialTreeEngine, [100], UseEngineRichardson.OFF)
+        report = run_study(contract, BinomialTreeEngine, [100], UseEngineSmoothing.OFF)
         assert len(report.df) == 1
-        # With only one N, we expect no external Richardson
-        assert 'price_RE' in report.df.columns
-        assert pd.isna(report.df['price_RE'].iloc[0])
-        assert report.richardson_gain is None
+        # With only one N, we expect no external average
+        assert 'price_avg' in report.df.columns
+        assert pd.isna(report.df['price_avg'].iloc[0])
+        assert report.smoothing_gain is None
 
     def test_zero_time_to_expiry(self):
         # Intrinsic at T=0
@@ -205,12 +205,12 @@ class TestEdgeCases:
         expected_intrinsic = max(0.0, 105 - 100)
 
         # Direct engine price should equal intrinsic
-        engine = BinomialTreeEngine(n_steps=50, richardson="off")
+        engine = BinomialTreeEngine(n_steps=50, smoothing="off")
         direct_result = engine.price(contract)
         assert abs(direct_result.price - expected_intrinsic) < 1e-12
 
         # In the study, pass the reference explicitly to avoid BS(T=0) issues
-        report = run_study(contract, BinomialTreeEngine, [50, 100], UseEngineRichardson.OFF, ref=expected_intrinsic)
+        report = run_study(contract, BinomialTreeEngine, [50, 100], UseEngineSmoothing.OFF, ref=expected_intrinsic)
         assert abs(report.df['price'].iloc[-1] - expected_intrinsic) < 1e-12
 
 

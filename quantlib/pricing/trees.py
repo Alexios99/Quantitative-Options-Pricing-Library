@@ -1,8 +1,31 @@
 from abc import ABC, abstractmethod
+import warnings
 import numpy as np
 from datetime import datetime
 from quantlib.core.payoffs import OptionContract, OptionType, ExerciseStyle
 from quantlib.pricing.analytical import PricingEngine, PricingResult, GreeksResult, MethodUsed, BlackScholesEngine
+
+# "off": raw lattice price; "odd_even": average of the N- and (N+1)-step prices, which cancels
+# most of the lattice's odd/even oscillation; "auto": odd_even only when the heuristic in
+# _use_auto_smoothing expects the oscillation to be large.
+SMOOTHING_MODES = ("off", "odd_even", "auto")
+# Deprecated richardson= values and their smoothing equivalents
+_RICHARDSON_ALIASES = {"off": "off", "on": "odd_even", "auto": "auto"}
+
+
+def _resolve_smoothing(smoothing: str, richardson) -> str:
+    if richardson is not None:
+        warnings.warn(
+            "richardson= is deprecated: the option averages the N- and (N+1)-step prices "
+            "(odd/even averaging), which is not Richardson extrapolation. "
+            "Use smoothing='off' | 'odd_even' | 'auto'.",
+            DeprecationWarning, stacklevel=3)
+        if richardson not in _RICHARDSON_ALIASES:
+            raise ValueError(f"Invalid richardson mode {richardson!r}; expected one of {list(_RICHARDSON_ALIASES)}")
+        return _RICHARDSON_ALIASES[richardson]
+    if smoothing not in SMOOTHING_MODES:
+        raise ValueError(f"Invalid smoothing mode {smoothing!r}; expected one of {list(SMOOTHING_MODES)}")
+    return smoothing
 
 
 class TreeEngine(PricingEngine, ABC):
@@ -35,7 +58,7 @@ class TreeEngine(PricingEngine, ABC):
         # Compute baseline lattice price 
         base_price = float(self._price_impl(contract))
 
-        # Allow engine-specific refinement (e.g., Richardson)
+        # Optional odd/even averaging (Europeans only)
         refined = float(self._refine_price(contract, base_price))
 
         return PricingResult(price=refined, method=self.method_used, time=datetime.now())
@@ -45,9 +68,30 @@ class TreeEngine(PricingEngine, ABC):
         """Concrete engines (binomial/trinomial) """
         pass
 
-    # Default: no refinement. Engines can override.
+    @abstractmethod
+    def _price_with_n(self, contract: OptionContract, n: int) -> float:
+        """Lattice price with exactly n steps."""
+        pass
+
     def _refine_price(self, contract: OptionContract, base_price: float) -> float:
-        return base_price
+        """Odd/even averaging: 0.5 * (P_N + P_{N+1}), for European options only.
+
+        Lattice prices oscillate between odd and even N as the strike moves relative to the
+        nodes; consecutive-N errors have opposite signs, so their average cancels most of it.
+        This is averaging, not Richardson extrapolation (which would assume a smooth
+        error expansion in 1/N that CRR prices do not have).
+        """
+        if contract.style != ExerciseStyle.EUROPEAN or self.smoothing == "off":
+            return base_price
+        if self.smoothing == "auto" and not self._use_auto_smoothing(contract):
+            return base_price
+        return 0.5 * (base_price + self._price_with_n(contract, self.n_steps + 1))
+
+    def _use_auto_smoothing(self, contract: OptionContract) -> bool:
+        """Heuristic: smooth when the oscillation is likely large (modest N, wide diffusion, near ATM)."""
+        lam = contract.volatility * np.sqrt(max(contract.time_to_expiry, 0.0))  # sigma * sqrt(T)
+        mny = abs(np.log(contract.spot / contract.strike)) if contract.spot > 0 and contract.strike > 0 else 1e9
+        return (self.n_steps < 200) or (lam > 0.35) or (mny < 0.1)
     
     def greeks(self, contract: OptionContract) -> GreeksResult:
         pass
@@ -55,15 +99,13 @@ class TreeEngine(PricingEngine, ABC):
         
 
 class BinomialTreeEngine(TreeEngine):
-    def __init__(self, n_steps: int, richardson: str = "off"):
+    def __init__(self, n_steps: int, smoothing: str = "off", richardson: str | None = None):
         """
-        richardson: "off" | "on" | "auto"
-        - "on": always use Richardson for European
-        - "off": never
-        - "auto": use a small heuristic
+        smoothing: "off" | "odd_even" | "auto" (see SMOOTHING_MODES); applies to Europeans only.
+        richardson: deprecated alias ("on" -> "odd_even").
         """
         super().__init__(n_steps)
-        self.richardson = richardson
+        self.smoothing = _resolve_smoothing(smoothing, richardson)
 
     @property
     def method_used(self) -> MethodUsed:
@@ -108,7 +150,7 @@ class BinomialTreeEngine(TreeEngine):
                     opt[i, j] = cont
         return float(opt[0, 0])
 
-    # one-shot price with a specific N (Richardson)
+    # one-shot price with a specific N
     def _price_with_n(self, contract: OptionContract, n: int) -> float:
         p, u, d, dt = self._calculate_probabilities(contract, n)
         disc = np.exp(-contract.risk_free_rate * dt)
@@ -119,43 +161,16 @@ class BinomialTreeEngine(TreeEngine):
     def _price_impl(self, contract: OptionContract) -> float:
         return self._price_with_n(contract, self.n_steps)
 
-    # optional refinement (Richardson averaging for European only)
-    def _refine_price(self, contract: OptionContract, base_price: float) -> float:
-        # turn off for non-European
-        if contract.style != ExerciseStyle.EUROPEAN:
-            return base_price
-
-        # config
-        if self.richardson == "off":
-            return base_price
-        if self.richardson == "on":
-            price_n   = base_price
-            price_n_plus_1 = self._price_with_n(contract, self.n_steps + 1)
-            return 0.5 * (price_n + price_n_plus_1)
-
-        # "auto" heuristic: enable when base error is likely larger
-        # (modest N, wide diffusion, near-ATM)
-        N = self.n_steps
-        lam = contract.volatility * np.sqrt(max(contract.time_to_expiry, 0.0))
-        mny = abs(np.log(contract.spot / contract.strike)) if contract.spot > 0 and contract.strike > 0 else 1e9
-        use_rich = (N < 200) or (lam > 0.35) or (mny < 0.1)
-
-        if not use_rich:
-            return base_price
-
-        price_n   = base_price
-        price_n_plus_1 = self._price_with_n(contract, N + 1)
-        return 0.5 * (price_n + price_n_plus_1)
-    
     def greeks(self, contract: OptionContract):
         """Greeks calculation not implemented yet."""
         raise NotImplementedError("Greeks calculation for trees not yet implemented")
 
 
 class TrinomialTreeEngine(TreeEngine):
-    def __init__(self, n_steps: int, richardson: str = "off"):
+    def __init__(self, n_steps: int, smoothing: str = "off", richardson: str | None = None):
+        """smoothing: "off" | "odd_even" | "auto"; richardson: deprecated alias ("on" -> "odd_even")."""
         super().__init__(n_steps)
-        self.richardson = richardson
+        self.smoothing = _resolve_smoothing(smoothing, richardson)
 
     @property
     def method_used(self) -> MethodUsed:
@@ -247,33 +262,6 @@ class TrinomialTreeEngine(TreeEngine):
     def _price_impl(self, contract: OptionContract) -> float:
         return self._price_with_n(contract, self.n_steps)
 
-    def _refine_price(self, contract: OptionContract, base_price: float) -> float:
-        # Only refine Europeans
-        if contract.style != ExerciseStyle.EUROPEAN:
-            return base_price
-
-        # Respect mode
-        if self.richardson == "off":
-            return base_price
-
-        if self.richardson == "on":
-            price_n   = base_price
-            price_n_plus_1 = self._price_with_n(contract, self.n_steps + 1)
-            return 0.5 * (price_n + price_n_plus_1)
-
-        # "auto": enable when grid error likely large: modest N, wide diffusion, near-ATM
-        N = self.n_steps
-        lam = contract.volatility * np.sqrt(max(contract.time_to_expiry, 0.0))  # σ√T
-        mny = abs(np.log(contract.spot / contract.strike)) if contract.spot > 0 and contract.strike > 0 else 1e9
-        use_rich = (N < 200) or (lam > 0.35) or (mny < 0.1)
-
-        if not use_rich:
-            return base_price
-
-        pN   = base_price
-        pNp1 = self._price_with_n(contract, N + 1)
-        return 0.5 * (pN + pNp1)
-    
     def greeks(self, contract: OptionContract):
         """Greeks calculation not implemented yet."""
         raise NotImplementedError("Greeks calculation for trees not yet implemented")

@@ -18,14 +18,14 @@ def plot_convergence(report: ConvergenceReport, save_path: Optional[str] = None)
     
     ax.plot(ns, bp_errors, 'o-', linewidth=2, markersize=6, color='steelblue', label='Tree Error')
     
-    # Richardson extrapolation if available
-    if 'price_RE' in report.df.columns and report.df['price_RE'].notna().any():
-        richardson_mask = report.df['price_RE'].notna()
-        re_errors = np.abs(report.df.loc[richardson_mask, 'price_RE'] - report.reference_price)
+    # Odd/even averaging if available
+    if 'price_avg' in report.df.columns and report.df['price_avg'].notna().any():
+        avg_mask = report.df['price_avg'].notna()
+        re_errors = np.abs(report.df.loc[avg_mask, 'price_avg'] - report.reference_price)
         re_bp_errors = (re_errors / report.reference_price) * 10000
-        re_ns = report.df.loc[richardson_mask, 'N'].values
+        re_ns = report.df.loc[avg_mask, 'N'].values
         
-        ax.plot(re_ns, re_bp_errors, 's--', linewidth=2, markersize=6, color='darkred', label='Richardson Extrapolation')
+        ax.plot(re_ns, re_bp_errors, 's--', linewidth=2, markersize=6, color='darkred', label='Odd/even average (N, N+1)')
     
     ax.set_xlabel('Number of Steps (N)', fontsize=12)
     ax.set_ylabel('Absolute Error (basis points)', fontsize=12)
@@ -41,8 +41,8 @@ def plot_convergence(report: ConvergenceReport, save_path: Optional[str] = None)
     plt.tight_layout()
     
     textstr = f'Order Estimate: {report.order_estimate:.2f}\n'
-    if report.richardson_gain is not None:
-        textstr += f'Richardson Gain: {report.richardson_gain:.1f}x'
+    if report.smoothing_gain is not None:
+        textstr += f'Averaging gain: {report.smoothing_gain:.1f}x'
     
     props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
     ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=10,
@@ -110,8 +110,8 @@ def format_bp_error(abs_error: float, reference_price: float) -> str:
     else:
         return f"{bp_error:.1f} bp"
     
-def plot_richardson_comparison(report: ConvergenceReport, save_path: Optional[str] = None):
-    """Compare base tree vs Richardson extrapolation errors"""
+def plot_smoothing_comparison(report: ConvergenceReport, save_path: Optional[str] = None):
+    """Compare raw tree errors with odd/even-averaged errors"""
     
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -123,20 +123,20 @@ def plot_richardson_comparison(report: ConvergenceReport, save_path: Optional[st
     
     ax.plot(ns, bp_errors_base, 'o-', linewidth=2, markersize=6, color='steelblue', label='Base Tree')
 
-    if 'price_RE' in report.df.columns and report.df['price_RE'].notna().any():
-        richardson_mask = report.df['price_RE'].notna()
-        re_ns = report.df.loc[richardson_mask, 'N'].values
-        re_prices = report.df.loc[richardson_mask, 'price_RE'].values
+    if 'price_avg' in report.df.columns and report.df['price_avg'].notna().any():
+        avg_mask = report.df['price_avg'].notna()
+        re_ns = report.df.loc[avg_mask, 'N'].values
+        re_prices = report.df.loc[avg_mask, 'price_avg'].values
         
         re_abs_errors = np.abs(re_prices - report.reference_price)
         re_bp_errors = (re_abs_errors / report.reference_price) * 10000
         
         ax.plot(re_ns, re_bp_errors, 's--', linewidth=2, markersize=6,
-                color='darkred', label='Richardson Extrapolation')
+                color='darkred', label='Odd/even average (N, N+1)')
       
     ax.set_xlabel('Number of Steps (N)', fontsize=12)
     ax.set_ylabel('Absolute Error (basis points)', fontsize=12)
-    ax.set_title('Richardson Extrapolation Comparison\n' +  f'Reference Price: {report.reference_price:.4f}', fontsize=14, pad=20)
+    ax.set_title('Odd/Even Averaging Comparison\n' +  f'Reference Price: {report.reference_price:.4f}', fontsize=14, pad=20)
     
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=11)
@@ -146,8 +146,8 @@ def plot_richardson_comparison(report: ConvergenceReport, save_path: Optional[st
             horizontalalignment='right', style='italic', alpha=0.7)
     
     textstr = f'Order Estimate: {report.order_estimate:.2f}\n'
-    if report.richardson_gain is not None:
-        textstr += f'Richardson Gain: {report.richardson_gain:.1f}x\n'
+    if report.smoothing_gain is not None:
+        textstr += f'Averaging gain: {report.smoothing_gain:.1f}x\n'
         textstr += '(Error reduction at largest N)'
     
     props = dict(boxstyle='round', facecolor='lightblue', alpha=0.8)
@@ -200,8 +200,8 @@ def _plot_loglog_subplot(ax, report):
     ax.set_ylabel('Error (bp)', fontsize=10)
     ax.grid(True, alpha=0.3)
 
-def _plot_richardson_subplot(ax, report):
-    """Plot Richardson comparison on given axis"""
+def _plot_smoothing_subplot(ax, report):
+    """Plot odd/even averaging comparison on given axis"""
     ns = report.df['N'].values
     abs_errors = report.df['abs_err'].values
     bp_errors = (abs_errors / report.reference_price) * 10000
@@ -210,18 +210,18 @@ def _plot_richardson_subplot(ax, report):
     ax.plot(ns, bp_errors, 'o-', linewidth=2, markersize=5, 
             color='steelblue', label='Base')
     
-    # Richardson if available
-    if 'price_RE' in report.df.columns and report.df['price_RE'].notna().any():
-        richardson_mask = report.df['price_RE'].notna()
-        re_ns = report.df.loc[richardson_mask, 'N'].values
-        re_prices = report.df.loc[richardson_mask, 'price_RE'].values
+    # Odd/even average if available
+    if 'price_avg' in report.df.columns and report.df['price_avg'].notna().any():
+        avg_mask = report.df['price_avg'].notna()
+        re_ns = report.df.loc[avg_mask, 'N'].values
+        re_prices = report.df.loc[avg_mask, 'price_avg'].values
         re_abs_errors = np.abs(re_prices - report.reference_price)
         re_bp_errors = (re_abs_errors / report.reference_price) * 10000
         
         ax.plot(re_ns, re_bp_errors, 's--', linewidth=2, markersize=5,
-                color='darkred', label='Richardson')
+                color='darkred', label='Odd/even average')
     
-    ax.set_title('Richardson Comparison', fontsize=11)
+    ax.set_title('Odd/Even Averaging', fontsize=11)
     ax.set_xlabel('N', fontsize=10)
     ax.set_ylabel('Error (bp)', fontsize=10)
     ax.grid(True, alpha=0.3)
@@ -248,8 +248,8 @@ def _plot_stats_subplot(ax, report):
 
     Status: {status}"""
 
-    if report.richardson_gain is not None:
-        stats_text += f"\n\nRichardson Gain: {report.richardson_gain:.2f}x"
+    if report.smoothing_gain is not None:
+        stats_text += f"\n\nAveraging gain: {report.smoothing_gain:.2f}x"
     
     # Add bp definition caption
     stats_text += f"\n\nbp = 1e4 × |P_num - P_ref| / P_ref"
@@ -260,17 +260,17 @@ def _plot_stats_subplot(ax, report):
             bbox=dict(boxstyle='round,pad=1', facecolor=status_color, alpha=0.8))
     
 def _determine_status(report: ConvergenceReport, final_error_bp: float) -> Tuple[str, str]:
-    """Determine pass/fail status and color based on Richardson/base error"""
+    """Determine pass/fail status and color based on averaged/base error"""
     
-    if report.richardson_gain is not None and 'price_RE' in report.df.columns:
-        richardson_mask = report.df['price_RE'].notna()
-        if richardson_mask.any():
-            max_re_idx = report.df.loc[richardson_mask, 'N'].idxmax()
-            re_price = report.df.loc[max_re_idx, 'price_RE']
+    if report.smoothing_gain is not None and 'price_avg' in report.df.columns:
+        avg_mask = report.df['price_avg'].notna()
+        if avg_mask.any():
+            max_re_idx = report.df.loc[avg_mask, 'N'].idxmax()
+            re_price = report.df.loc[max_re_idx, 'price_avg']
             re_error_bp = abs(re_price - report.reference_price) / report.reference_price * 10000
             
-            if re_error_bp <= 1.0:  # Richardson ≤ 1 bp
-                return "PASSED (Richardson)", "lightgreen"
+            if re_error_bp <= 1.0:  # averaged price within 1 bp
+                return "PASSED (odd/even average)", "lightgreen"
     
     if final_error_bp <= 5.0:  # Base ≤ 5 bp
         return "PASSED (Base)", "lightgreen"
@@ -320,7 +320,7 @@ def plot_convergence_summary(report: ConvergenceReport, include_stats: bool = Tr
     
     _plot_convergence_subplot(ax1, report)
     _plot_loglog_subplot(ax2, report)
-    _plot_richardson_subplot(ax3, report)
+    _plot_smoothing_subplot(ax3, report)
     
     if include_stats:
         _plot_stats_subplot(ax4, report)
@@ -834,3 +834,6 @@ def compare_monte_carlo_methods(contract, path_counts=None, save_path: Optional[
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     
     return fig, (ax1, ax2, ax3, ax4)
+
+# Deprecated name kept for existing callers
+plot_richardson_comparison = plot_smoothing_comparison

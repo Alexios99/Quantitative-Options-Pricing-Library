@@ -11,9 +11,9 @@ class TestBinomialTreeEngine:
 
     def setup_method(self):
         # Base engines used across tests
-        self.engine_off = BinomialTreeEngine(n_steps=50, richardson="off")
-        self.engine_on  = BinomialTreeEngine(n_steps=50, richardson="on")
-        self.engine_auto = BinomialTreeEngine(n_steps=50, richardson="auto")
+        self.engine_off = BinomialTreeEngine(n_steps=50, smoothing="off")
+        self.engine_on  = BinomialTreeEngine(n_steps=50, smoothing="odd_even")
+        self.engine_auto = BinomialTreeEngine(n_steps=50, smoothing="auto")
         self.bs_engine = BlackScholesEngine()
 
         self.standard_contract = OptionContract(
@@ -23,7 +23,7 @@ class TestBinomialTreeEngine:
         )
 
     def test_binomial_engine_creation(self):
-        engine = BinomialTreeEngine(n_steps=100, richardson="off")
+        engine = BinomialTreeEngine(n_steps=100, smoothing="off")
         assert engine.n_steps == 100
         assert engine.method_used == MethodUsed.BINOMIAL_TREE
 
@@ -33,11 +33,10 @@ class TestBinomialTreeEngine:
         with pytest.raises(ValueError):
             BinomialTreeEngine(n_steps=-1)
 
-        # bad richardson mode is a programming-time error (optional check if you validate it)
-        # Here we just assert valid modes create successfully
-        BinomialTreeEngine(n_steps=10, richardson="on")
-        BinomialTreeEngine(n_steps=10, richardson="off")
-        BinomialTreeEngine(n_steps=10, richardson="auto")
+        # valid smoothing modes create successfully
+        BinomialTreeEngine(n_steps=10, smoothing="odd_even")
+        BinomialTreeEngine(n_steps=10, smoothing="off")
+        BinomialTreeEngine(n_steps=10, smoothing="auto")
 
     def test_zero_expiry_intrinsic(self):
         # Base class should short-circuit to intrinsic
@@ -57,8 +56,8 @@ class TestBinomialTreeEngine:
         res_put = self.engine_off.price(zero_time_put)
         assert abs(res_put.price - 10.0) < 1e-9  # intrinsic = 110 - 100
 
-    def test_european_call_vs_blackscholes_richardson_off(self):
-        # Tolerances looser when Richardson is OFF
+    def test_european_call_vs_blackscholes_smoothing_off(self):
+        # Tolerances looser without odd/even averaging
         test_cases = [
             (100, 90, 0.2, 1.0, "ITM"),
             (100, 100, 0.2, 1.0, "ATM"),
@@ -75,8 +74,8 @@ class TestBinomialTreeEngine:
             tol = max(0.11, 0.0015 * abs(bs_p))
             assert abs(tree_p - bs_p) < tol, f"{desc}: tree={tree_p:.4f} bs={bs_p:.4f}"
 
-    def test_european_call_vs_blackscholes_richardson_on(self):
-        # Much tighter tolerance when Richardson is ON
+    def test_european_call_vs_blackscholes_odd_even_averaging(self):
+        # Much tighter tolerance with odd/even averaging
         test_cases = [
             (100, 90, 0.2, 1.0, "ITM"),
             (100, 100, 0.2, 1.0, "ATM"),
@@ -89,7 +88,7 @@ class TestBinomialTreeEngine:
             tree_p = self.engine_on.price(c).price
             bs_p = self.bs_engine.price(c).price
 
-            # 5bp or 0.1%, whichever larger
+            # Absolute 0.05 or 0.1% of price, whichever larger
             tol = max(0.05, 0.001 * abs(bs_p))
             assert abs(tree_p - bs_p) < tol, f"{desc}: tree={tree_p:.4f} bs={bs_p:.4f}"
 
@@ -168,11 +167,11 @@ class TestBinomialTreeEngine:
         assert p_hiK < p_base
 
     def test_convergence_rate(self):
-        # Prices should stabilise as n_steps grows (with Richardson OFF for a pure lattice test)
+        # Prices should stabilise as n_steps grows (smoothing off for a pure lattice test)
         step_counts = [10, 20, 50, 100]
         prices = []
         for n in step_counts:
-            eng = BinomialTreeEngine(n_steps=n, richardson="off")
+            eng = BinomialTreeEngine(n_steps=n, smoothing="off")
             prices.append(eng.price(self.standard_contract).price)
 
         diffs = [abs(prices[i+1] - prices[i]) for i in range(len(prices)-1)]
@@ -203,9 +202,9 @@ class TestBinomialTreeParameterized:
     TOLERANCE_SCALING_FACTOR = 50.0
 
     @pytest.mark.parametrize("n_steps", [5, 10, 25, 50, 100])
-    @pytest.mark.parametrize("rich", ["off", "on", "auto"])
-    def test_convergence_with_steps(self, n_steps, rich):
-        engine = BinomialTreeEngine(n_steps=n_steps, richardson=rich)
+    @pytest.mark.parametrize("smoothing", ["off", "odd_even", "auto"])
+    def test_convergence_with_steps(self, n_steps, smoothing):
+        engine = BinomialTreeEngine(n_steps=n_steps, smoothing=smoothing)
         bs_engine = BlackScholesEngine()
 
         c = OptionContract(
@@ -219,12 +218,12 @@ class TestBinomialTreeParameterized:
 
         # Tolerance improves with steps; keep a loose bound that shrinks with N
         tol = max(self.BASE_TOLERANCE, self.TOLERANCE_SCALING_FACTOR / n_steps)
-        assert abs(tree_p - bs_p) < tol, f"n={n_steps}, rich={rich}"
+        assert abs(tree_p - bs_p) < tol, f"n={n_steps}, smoothing={smoothing}"
 
     @pytest.mark.parametrize("option", [OptionType.CALL, OptionType.PUT])
     @pytest.mark.parametrize("style", [ExerciseStyle.EUROPEAN, ExerciseStyle.AMERICAN])
     def test_all_option_combinations(self, option, style):
-        engine = BinomialTreeEngine(n_steps=50, richardson="auto")
+        engine = BinomialTreeEngine(n_steps=50, smoothing="auto")
         c = OptionContract(
             spot=100.0, strike=100.0, time_to_expiry=1.0,
             risk_free_rate=0.05, volatility=0.2,
@@ -243,9 +242,9 @@ class TestTrinomialTreeEngine:
 
     def setup_method(self):
         # Base engines used across tests
-        self.engine = TrinomialTreeEngine(n_steps=50, richardson="auto")
+        self.engine = TrinomialTreeEngine(n_steps=50, smoothing="auto")
         self.bs_engine = BlackScholesEngine()
-        self.binomial_engine = BinomialTreeEngine(n_steps=50, richardson="off")
+        self.binomial_engine = BinomialTreeEngine(n_steps=50, smoothing="off")
 
         self.standard_contract = OptionContract(
             spot=100.0, strike=100.0, time_to_expiry=1.0,
@@ -302,7 +301,7 @@ class TestTrinomialTreeEngine:
     def test_european_call_vs_blackscholes_high_vol_long(self):
         # High vol, long tenor (σ=0.4, T=2, N=50) → lattice has O(Δt) bias + odd/even oscillation.
         # With N=50 and no strong smoothing, ~10–11¢ error vs BS is normal.
-        # Relax tolerance here; Richardson or larger N restores tighter bp.
+        # Relax tolerance here; odd/even averaging or larger N restores tighter bp.
 
         test_cases = [
             (100, 100, 0.4, 2.0, "High vol, long")
@@ -505,7 +504,7 @@ class TestTrinomialTreeParameterized:
     def test_engine_comparison(self, engine_type):
         """Compare both engine types against Black-Scholes"""
         if engine_type == "binomial":
-            engine = BinomialTreeEngine(n_steps=100, richardson="on")
+            engine = BinomialTreeEngine(n_steps=100, smoothing="odd_even")
             tolerance = 0.05
         else:
             engine = TrinomialTreeEngine(n_steps=100)
@@ -523,3 +522,35 @@ class TestTrinomialTreeParameterized:
         bs_price = bs_engine.price(contract).price
 
         assert abs(tree_price - bs_price) < tolerance
+
+class TestSmoothingOption:
+    """The option formerly called "richardson" is odd/even averaging: 0.5 * (P_N + P_{N+1})."""
+
+    CALL = OptionContract(100.0, 100.0, 1.0, 0.05, 0.2, OptionType.CALL, ExerciseStyle.EUROPEAN)
+
+    @pytest.mark.parametrize("engine_cls", [BinomialTreeEngine, TrinomialTreeEngine])
+    def test_odd_even_is_average_of_n_and_n_plus_1(self, engine_cls):
+        n = 60
+        p_n = engine_cls(n, smoothing="off").price(self.CALL).price
+        p_n1 = engine_cls(n + 1, smoothing="off").price(self.CALL).price
+        assert engine_cls(n, smoothing="odd_even").price(self.CALL).price == pytest.approx(0.5 * (p_n + p_n1), abs=1e-14)
+
+    @pytest.mark.parametrize("engine_cls", [BinomialTreeEngine, TrinomialTreeEngine])
+    def test_american_prices_are_not_averaged(self, engine_cls):
+        american = OptionContract(100.0, 100.0, 1.0, 0.05, 0.2, OptionType.PUT, ExerciseStyle.AMERICAN)
+        assert (engine_cls(60, smoothing="odd_even").price(american).price
+                == engine_cls(60, smoothing="off").price(american).price)
+
+    @pytest.mark.parametrize("old, new", [("on", "odd_even"), ("off", "off"), ("auto", "auto")])
+    def test_richardson_alias_is_deprecated_and_equivalent(self, old, new):
+        with pytest.warns(DeprecationWarning, match="odd/even averaging"):
+            legacy = BinomialTreeEngine(60, richardson=old)
+        assert legacy.smoothing == new
+        assert legacy.price(self.CALL).price == BinomialTreeEngine(60, smoothing=new).price(self.CALL).price
+
+    @pytest.mark.parametrize("engine_cls", [BinomialTreeEngine, TrinomialTreeEngine])
+    def test_invalid_modes_raise(self, engine_cls):
+        with pytest.raises(ValueError):
+            engine_cls(10, smoothing="richardson")
+        with pytest.raises(ValueError), pytest.warns(DeprecationWarning):
+            engine_cls(10, richardson="yes")

@@ -9,7 +9,7 @@ A Python library for pricing equity options with several numerical methods and c
 
 ### Pricing engines
 *   **Analytical:** Black-Scholes-Merton prices for European calls and puts, with closed-form Delta, Gamma, Vega, Theta and Rho.
-*   **Trees:** Cox-Ross-Rubinstein (CRR) binomial and Kamrad-Ritchken trinomial lattices for European and American exercise, with optional averaging of N- and (N+1)-step prices to damp CRR's odd/even oscillation.
+*   **Trees:** Cox-Ross-Rubinstein (CRR) binomial and Kamrad-Ritchken trinomial lattices for European and American exercise, with optional odd/even averaging (`smoothing="odd_even"`: the mean of the N- and (N+1)-step prices) to damp the lattice's odd/even oscillation for European options.
 *   **Finite differences (PDE):** θ-scheme on a uniform spot grid (Crank-Nicolson by default) with Rannacher start-up (fully implicit half-steps to damp the oscillations caused by the payoff kink) and Dirichlet boundary conditions. American exercise is handled with Projected Successive Over-Relaxation (PSOR). Unstable grids raise an error rather than returning a price.
 *   **Monte Carlo:** geometric Brownian motion paths with antithetic variates or control variates. American options are priced with Longstaff-Schwartz least-squares regression. Delta uses the pathwise estimator; the other Greeks use bump-and-revalue.
 

@@ -10,9 +10,14 @@ from typing import Dict, Optional, Any, Iterable
 from types import SimpleNamespace
 from dataclasses import dataclass
 
-class UseEngineRichardson(str, Enum):
+class UseEngineSmoothing(str, Enum):
+    """Whether run_study asks the engine to apply odd/even averaging internally."""
     OFF = "off"
     ON = "on"
+
+
+# Deprecated name: the option is odd/even averaging, not Richardson extrapolation
+UseEngineRichardson = UseEngineSmoothing
 
 @dataclass
 class ConvergenceReport:
@@ -20,7 +25,7 @@ class ConvergenceReport:
     reference_price: float                 # benchmark
     order_estimate: float                  # slope on loglog |err| vs N
     odd_even_gap: float                    # mean(|err_even|) - mean(|err_odd|)
-    richardson_gain: Optional[float]       # ratio err_noRE / err_RE at largest N
+    smoothing_gain: Optional[float]        # ratio err_raw / err_avg at largest N with an average
     passed: bool                           # basic thresholds met
     meta: Dict[str, Any]                   # params used
 
@@ -39,7 +44,7 @@ def reference_price(contract: OptionContract, n_steps=5000):
     if contract.style == ExerciseStyle.EUROPEAN:
         ref_price = BlackScholesEngine().price(contract).price
     else:
-        ref_price = TrinomialTreeEngine(n_steps, "off").price(contract).price
+        ref_price = TrinomialTreeEngine(n_steps, smoothing="off").price(contract).price
     return ref_price
 
 def estimate_order(ns: Iterable[int], abs_err: Iterable[float], last_k=4):
@@ -51,28 +56,30 @@ def estimate_order(ns: Iterable[int], abs_err: Iterable[float], last_k=4):
     slope, _ = np.polyfit(x, y, 1)
     return -slope 
 
-def run_study(contract: OptionContract, engine_cls, n_grid: Iterable[int], use_engine_richardson: UseEngineRichardson=UseEngineRichardson.OFF, ref=None):
+def run_study(contract: OptionContract, engine_cls, n_grid: Iterable[int], use_engine_smoothing: UseEngineSmoothing = UseEngineSmoothing.OFF, ref=None):
+    """Tree convergence study. With engine smoothing OFF, also reports the external odd/even
+    average 0.5 * (P_N + P_{N+1}) in column price_avg (all but the largest N)."""
     ref_price = ref if ref is not None else reference_price(contract)
     rows = []
 
     for n in n_grid:
-        if use_engine_richardson == UseEngineRichardson.ON:
-            engine = engine_cls(n_steps=n, richardson="on")
+        if use_engine_smoothing == UseEngineSmoothing.ON:
+            engine = engine_cls(n_steps=n, smoothing="odd_even")
         else:
-            engine = engine_cls(n_steps=n, richardson="off")
+            engine = engine_cls(n_steps=n, smoothing="off")
         
         t0 = time.perf_counter()
         pN = engine.price(contract).price
         dt = (time.perf_counter() - t0) * 1000.0
 
-        if n < max(n_grid) and use_engine_richardson == UseEngineRichardson.OFF: 
-            engine_nP1 = engine_cls(n_steps=n+1, richardson="off")
+        if n < max(n_grid) and use_engine_smoothing == UseEngineSmoothing.OFF:
+            engine_nP1 = engine_cls(n_steps=n+1, smoothing="off")
             pNP1 = engine_nP1.price(contract).price
-            pRE = 0.5 * (pN + pNP1)
+            p_avg = 0.5 * (pN + pNP1)
         else:
-            pRE = None  
+            p_avg = None
         
-        rows.append(dict(N=n, price=pN, price_RE=pRE, abs_err=abs(pN - ref_price), rel_err=abs((pN - ref_price) / ref_price) if ref_price else np.nan, ms=dt))
+        rows.append(dict(N=n, price=pN, price_avg=p_avg, abs_err=abs(pN - ref_price), rel_err=abs((pN - ref_price) / ref_price) if ref_price else np.nan, ms=dt))
 
     df = pd.DataFrame(rows).sort_values("N").reset_index(drop=True)
 
@@ -81,14 +88,14 @@ def run_study(contract: OptionContract, engine_cls, n_grid: Iterable[int], use_e
     even = df.loc[df.N % 2 == 0, "abs_err"].mean()
     odd_even_gap = (even or 0) - (odd or 0)
 
-    richardson_gain = None
-    if "price_RE" in df and df.price_RE.notna().any():
-        mask = df.price_RE.notna() & df.price.notna()
+    smoothing_gain = None
+    if "price_avg" in df and df.price_avg.notna().any():
+        mask = df.price_avg.notna() & df.price.notna()
         if mask.any():
             tail = df[mask].iloc[-1]
-        err_no = abs(tail.price - ref_price)
-        err_re = abs(tail.price_RE - ref_price)
-        richardson_gain = (err_no / err_re) if err_re > 0 else None
+        err_raw = abs(tail.price - ref_price)
+        err_avg = abs(tail.price_avg - ref_price)
+        smoothing_gain = (err_raw / err_avg) if err_avg > 0 else None
 
     passed = bool(
         (df.abs_err.iloc[-1] < 1e-3) and
@@ -100,7 +107,7 @@ def run_study(contract: OptionContract, engine_cls, n_grid: Iterable[int], use_e
         reference_price=ref_price,
         order_estimate=order,
         odd_even_gap=odd_even_gap if np.isfinite(odd_even_gap) else 0.0,
-        richardson_gain=richardson_gain,
+        smoothing_gain=smoothing_gain,
         passed=passed,
         meta=dict(engine=engine_cls.__name__, grid=list(n_grid))
     )
@@ -307,8 +314,8 @@ def run_monte_carlo_study(contract: OptionContract, path_counts: Iterable[int] =
     # No odd-even gap for MC
     odd_even_gap = 0.0
     
-    # No Richardson for basic MC
-    richardson_gain = None
+    # No odd/even averaging for MC
+    smoothing_gain = None
     
     # MC-specific passing criteria
     passed = bool(
@@ -321,7 +328,7 @@ def run_monte_carlo_study(contract: OptionContract, path_counts: Iterable[int] =
         reference_price=ref_price,
         order_estimate=order,
         odd_even_gap=odd_even_gap,
-        richardson_gain=richardson_gain,
+        smoothing_gain=smoothing_gain,
         passed=passed,
         meta=dict(
             engine="MonteCarloEngine",
