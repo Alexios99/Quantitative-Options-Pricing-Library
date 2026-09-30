@@ -168,6 +168,14 @@ print(f"Mean Hedging Error: {analysis['mean_hedging_error']:.4f}")
 # Visualise with: hedger.plot_simulation(results)
 ```
 
+## Benchmarks
+
+`benchmarks/benchmark.py` reproduces the accuracy results in [benchmarks/RESULTS.md](benchmarks/RESULTS.md) from synthetic, seeded inputs: tree and PDE convergence against Black-Scholes, American-put pricing, Monte Carlo standard-error reduction averaged over 20 seeds, Heston and SABR checks, and delta-hedging error against rebalancing frequency.
+
+```bash
+python benchmarks/benchmark.py
+```
+
 ## Testing
 
 ```bash
