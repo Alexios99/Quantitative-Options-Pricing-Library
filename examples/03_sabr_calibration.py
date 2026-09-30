@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # ==========================================
-# 1. Market Data (Volatility Smile)
+# 1. Synthetic Volatility Smile
 # ==========================================
 # Typical "smile" shape: Higher IV at wings (OTM puts/calls)
 # T = 1.0 year, Forward = 100
@@ -31,15 +31,17 @@ for K, iv in market_data:
 # ==========================================
 # 2. Calibrate SABR Model
 # ==========================================
-# We fit Alpha, Nu, Rho (Beta fixed at 0.5 usually)
-calibrator = SABRCalibrator()
-params = calibrator.calibrate(market_data, forward, expiry)
+# Beta is fixed (0.5 here); Alpha, Rho and Nu are fitted
+calibrator = SABRCalibrator(beta=0.5)
+result = calibrator.calibrate(market_data, forward, expiry)
+params = result.params
 
 print(f"\n--- Calibrated SABR Parameters ---")
 print(f"Alpha (Level): {params.alpha:.4f}")
-print(f"Beta  (Skew):  {params.beta:.4f} (Fixed/Initial)")
+print(f"Beta  (Fixed): {params.beta:.4f}")
 print(f"Rho   (Correl):{params.rho:.4f}")
 print(f"Nu    (VolVol):{params.nu:.4f}")
+print(f"Fit RMSE:      {result.rmse_bp:.1f} vol bp over {result.n_points} quotes")
 
 # ==========================================
 # 3. Visualize Fit
@@ -56,9 +58,9 @@ for K in fine_strikes:
     model_ivs.append(iv)
 
 plt.figure(figsize=(10, 6))
-plt.plot(strikes, market_ivs, 'ro', label='Market Data')
+plt.plot(strikes, market_ivs, 'ro', label='Synthetic quotes')
 plt.plot(fine_strikes, model_ivs, 'b-', label='SABR Fit')
-plt.title(f'SABR Calibration (T={expiry})')
+plt.title(f'SABR Calibration (T={expiry}, beta={params.beta}, RMSE={result.rmse_bp:.1f} vol bp)')
 plt.xlabel('Strike')
 plt.ylabel('Implied Volatility')
 plt.grid(True)

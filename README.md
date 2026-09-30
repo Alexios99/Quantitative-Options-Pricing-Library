@@ -15,7 +15,7 @@ A Python library for pricing equity options with several numerical methods and c
 
 ### Volatility models
 *   **Implied volatility surface:** Brent root-finding on the Black-Scholes price, with bilinear interpolation in (strike, expiry).
-*   **SABR:** Hagan et al. (2002) lognormal implied-volatility approximation, calibrated to a single-expiry smile with L-BFGS-B.
+*   **SABR:** full Hagan et al. (2002) lognormal implied-volatility approximation. β is fixed by the user (default 0.5); α, ρ and ν are calibrated to a single-expiry smile with L-BFGS-B, and the fit RMSE is reported.
 *   **Heston:** semi-analytical pricing by numerical integration of the characteristic function, calibrated to a single-expiry smile with L-BFGS-B.
 
 ### Hedging
@@ -121,12 +121,14 @@ market_data = [(90, 0.24), (95, 0.22), (100, 0.20), (105, 0.19), (110, 0.195)]
 forward = 100.0
 expiry = 1.0
 
-calibrator = SABRCalibrator()
-params = calibrator.calibrate(market_data, forward, expiry)
+# beta is fixed (default 0.5); alpha, rho and nu are fitted
+calibrator = SABRCalibrator(beta=0.5)
+result = calibrator.calibrate(market_data, forward, expiry)
 
-print(f"SABR Alpha: {params.alpha:.4f}")
-print(f"SABR Rho: {params.rho:.4f}")
-print(f"SABR Nu: {params.nu:.4f}")
+print(f"SABR Alpha: {result.params.alpha:.4f}")
+print(f"SABR Rho: {result.params.rho:.4f}")
+print(f"SABR Nu: {result.params.nu:.4f}")
+print(f"Fit RMSE: {result.rmse_bp:.1f} vol bp")
 ```
 
 #### Heston pricing
