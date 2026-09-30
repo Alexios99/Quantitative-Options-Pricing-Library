@@ -56,7 +56,9 @@ class PDEEngine(PricingEngine):
         
         
     def _setup_boundary_conditions(self, contract, time_index: int):
-        tau = self.t_grid[time_index]  # time remaining
+        # t_grid is calendar time (t_grid[0] = T at expiry, t_grid[-1] = 0 today); the solver
+        # marches from the payoff, so after time_index steps the time to expiry is T - t.
+        tau = contract.time_to_expiry - self.t_grid[time_index]
 
         if contract.option == OptionType.CALL:
             # S -> 0

@@ -142,6 +142,34 @@ class TestPDEEngine:
             assert pde_engine.S_min_boundary > 0  # Put worth discounted strike at S=0
             assert pde_engine.S_max_boundary == 0  # Put worth 0 at high S
     
+    def test_boundary_conditions_use_time_to_expiry(self, pde_engine, standard_contract_european_call,
+                                                    standard_contract_european_put):
+        """After one step from the payoff, time to expiry is dt, not T - dt."""
+        call = standard_contract_european_call
+        pde_engine._build_grid(call)
+        dt = call.time_to_expiry / pde_engine.n_time
+        pde_engine._setup_boundary_conditions(call, 1)
+        assert pde_engine.S_max_boundary == pytest.approx(
+            pde_engine.s_max - call.strike * np.exp(-call.risk_free_rate * dt), abs=1e-12)
+
+        put = standard_contract_european_put
+        pde_engine._build_grid(put)
+        pde_engine._setup_boundary_conditions(put, pde_engine.n_time)
+        assert pde_engine.S_min_boundary == pytest.approx(
+            put.strike * np.exp(-put.risk_free_rate * put.time_to_expiry), abs=1e-12)
+
+    def test_call_spatial_error_is_second_order(self, standard_contract_european_call, default_solver_params):
+        """Crank-Nicolson is O(dS^2): halving dS should cut the error by ~4x (a wrong
+        boundary value adds an error floor that stops this)."""
+        contract = standard_contract_european_call
+        bs = BlackScholesEngine().price(contract).price
+        errors = []
+        for n_space in (101, 201, 401):
+            grid = SimpleNamespace(n_space=n_space, n_time=500, s_max=200, theta=0.5)
+            errors.append(abs(PDEEngine(grid, default_solver_params).price(contract).price - bs))
+        assert errors[0] / errors[1] > 3.0
+        assert errors[1] / errors[2] > 3.0
+
     def test_european_call_vs_black_scholes(self, pde_engine, standard_contract_european_call):
         """Test European call accuracy against Black-Scholes"""
         contract = standard_contract_european_call
