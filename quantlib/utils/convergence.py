@@ -207,13 +207,23 @@ def run_pde_convergence_study(contract: OptionContract,
     
     # Estimate convergence orders
     spatial_order = estimate_order(spatial_df['n_space'], spatial_df['abs_err'])
-    temporal_order = estimate_order(temporal_df['n_time'], temporal_df['abs_err'])
+    # Temporal order from successive differences P(n_i) - P(n_{i+1}) on the fixed spatial grid:
+    # the spatial error is identical in both prices and cancels, whereas the error against the
+    # analytical price is dominated by that fixed spatial floor once the time error is small.
+    # Needs at least three time grids; NaN otherwise.
+    if len(temporal_df) >= 3:
+        temporal_diffs = np.abs(np.diff(temporal_df['price'].to_numpy()))
+        temporal_order = estimate_order(temporal_df['n_time'].to_numpy()[:-1], temporal_diffs)
+    else:
+        temporal_order = np.nan
     
     # Check convergence criteria
     final_spatial_err = spatial_df['abs_err'].iloc[-1]
     final_temporal_err = temporal_df['abs_err'].iloc[-1]
+    # Expected: O(h²) in space; O(Δt²) in time for Crank-Nicolson (theta = 0.5), O(Δt) otherwise
+    min_temporal_order = 1.5 if theta == 0.5 else 0.8
     passed = (final_spatial_err < 1e-3 and final_temporal_err < 1e-3 and 
-              spatial_order > 1.5 and temporal_order > 0.8)  # Expected: O(h²), O(Δt)
+              spatial_order > 1.5 and temporal_order > min_temporal_order)
     
     return PDEConvergenceReport(
         spatial_df=spatial_df,

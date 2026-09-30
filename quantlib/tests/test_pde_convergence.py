@@ -172,9 +172,9 @@ class TestPDEConvergence:
         # Spatial should be close to 2 (O(h²))
         assert 1.5 < report.spatial_order < 2.5
         
-        # Temporal should be close to 1 for Crank-Nicolson (O(Δt))
-        # But might be closer to 2 due to higher order accuracy
-        assert 0.8 < report.temporal_order < 2.2 or report.temporal_order > -0.1
+        # Crank-Nicolson is second order in time, O(Δt²). The study measures the temporal order
+        # from successive differences on a fixed spatial grid, so spatial error cancels.
+        assert 1.5 < report.temporal_order < 2.5
 
     def test_pde_convergence_pass_criteria(self):
         """Test convergence pass/fail criteria"""

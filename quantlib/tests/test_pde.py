@@ -182,9 +182,9 @@ class TestPDEEngine:
         # Check price is reasonable
         assert 8 <= pde_result.price <= 15  # Expected range for these parameters
         
-        # Check accuracy (within 5 bp)
+        # Absolute price error <= 0.05 (about 48 bp of the ~10.45 call price; not 5 bp)
         error = abs(pde_result.price - bs_result.price)
-        assert error <= 0.05, f"PDE error {error:.6f} > 5bp vs Black-Scholes"
+        assert error <= 0.05, f"PDE absolute error {error:.6f} > 0.05 vs Black-Scholes"
         
         # Check pricing result metadata
         assert pde_result.method.value == "pde"
@@ -202,9 +202,9 @@ class TestPDEEngine:
         # Check price is reasonable
         assert 5 <= pde_result.price <= 12  # Expected range for ATM put
         
-        # Check accuracy (within 5 bp)
+        # Absolute price error <= 0.05 (about 90 bp of the ~5.57 put price; not 5 bp)
         error = abs(pde_result.price - bs_result.price)
-        assert error <= 0.05, f"PDE error {error:.6f} > 5bp vs Black-Scholes"
+        assert error <= 0.05, f"PDE absolute error {error:.6f} > 0.05 vs Black-Scholes"
     
     def test_american_put_early_exercise_premium(self, pde_engine, american_put_otm):
         """Test American put has early exercise premium"""
@@ -429,6 +429,95 @@ class TestPDEEngine:
         """Test that Greeks method raises NotImplementedError"""
         with pytest.raises(NotImplementedError):
             pde_engine.greeks(standard_contract_european_call)
+
+
+class TestRannacherAndStability:
+    """Rannacher start-up damps the Crank-Nicolson oscillations from the payoff kink;
+    unstable schemes raise instead of silently returning a price."""
+
+    SOLVER = SimpleNamespace(psor_omega=1.2, psor_tol=1e-6, psor_max_iter=50)
+
+    @pytest.fixture
+    def default_solver_params(self):
+        return SimpleNamespace(psor_omega=1.2, psor_tol=1e-6, psor_max_iter=50)
+
+    @pytest.fixture
+    def default_grid_params(self):
+        return SimpleNamespace(n_space=100, n_time=500, s_max=200, theta=0.5)
+
+    @pytest.fixture
+    def standard_contract_european_call(self):
+        return OptionContract(option=OptionType.CALL, strike=100, spot=100, risk_free_rate=0.05,
+                              volatility=0.2, time_to_expiry=1.0, style=ExerciseStyle.EUROPEAN)
+
+    @staticmethod
+    def _gamma_near_strike(engine, contract):
+        engine.price(contract)
+        v, dS = engine.solution, engine.dx
+        gamma = (v[2:] - 2 * v[1:-1] + v[:-2]) / dS ** 2
+        s_mid = engine.s_grid[1:-1]
+        near = (s_mid > 0.8 * contract.strike) & (s_mid < 1.2 * contract.strike)
+        return gamma[near]
+
+    def test_rannacher_removes_gamma_oscillations(self):
+        """Fine spot grid, coarse time grid: plain CN gives negative gamma for a call near the strike."""
+        contract = OptionContract(option=OptionType.CALL, strike=100, spot=100, risk_free_rate=0.05,
+                                  volatility=0.2, time_to_expiry=0.25, style=ExerciseStyle.EUROPEAN)
+        bs_gamma = BlackScholesEngine().greeks(contract).gamma
+
+        def grid(steps):
+            return SimpleNamespace(n_space=401, n_time=10, s_max=200, theta=0.5, rannacher_steps=steps)
+
+        cn = self._gamma_near_strike(PDEEngine(grid(0), self.SOLVER), contract)
+        rannacher = self._gamma_near_strike(PDEEngine(grid(2), self.SOLVER), contract)
+        assert cn.min() < 0                              # documents the problem being fixed
+        assert rannacher.min() > 0                       # a call's gamma is positive
+        assert rannacher.max() == pytest.approx(bs_gamma, rel=0.1)
+
+    def test_rannacher_improves_price_on_coarse_time_grid(self):
+        contract = OptionContract(option=OptionType.CALL, strike=100, spot=100, risk_free_rate=0.05,
+                                  volatility=0.2, time_to_expiry=1.0, style=ExerciseStyle.EUROPEAN)
+        bs = BlackScholesEngine().price(contract).price
+
+        def error(steps):
+            grid = SimpleNamespace(n_space=401, n_time=25, s_max=200, theta=0.5, rannacher_steps=steps)
+            return abs(PDEEngine(grid, self.SOLVER).price(contract).price - bs)
+
+        assert error(2) < 0.2 * error(0)
+
+    def test_rannacher_is_on_by_default(self, default_grid_params, default_solver_params):
+        assert PDEEngine(default_grid_params, default_solver_params).rannacher_steps == 2
+
+    def test_negative_rannacher_steps_rejected(self, default_solver_params):
+        grid = SimpleNamespace(n_space=100, n_time=100, s_max=200, theta=0.5, rannacher_steps=-1)
+        with pytest.raises(ValueError):
+            PDEEngine(grid, default_solver_params)
+
+    def test_unstable_explicit_scheme_raises(self, standard_contract_european_call, default_solver_params):
+        """Explicit Euler (theta=0) needs dt <= dS^2 / (sigma^2 S_max^2) ~ 0.0025 here; dt = 0.02 blows up."""
+        from quantlib.pricing.pde import PDEStabilityError
+        grid = SimpleNamespace(n_space=101, n_time=50, s_max=200, theta=0.0, rannacher_steps=0)
+        with pytest.raises(PDEStabilityError):
+            PDEEngine(grid, default_solver_params).price(standard_contract_european_call)
+
+    def test_stable_explicit_scheme_prices(self, standard_contract_european_call, default_solver_params):
+        grid = SimpleNamespace(n_space=101, n_time=1000, s_max=200, theta=0.0, rannacher_steps=0)
+        price = PDEEngine(grid, default_solver_params).price(standard_contract_european_call).price
+        bs = BlackScholesEngine().price(standard_contract_european_call).price
+        assert abs(price - bs) < 0.05
+
+    def test_large_prices_are_not_cut_off(self, default_solver_params):
+        """The old solver stopped time-stepping once any value exceeded 1000, which is a legitimate
+        price for a high-spot underlying. Prices scale with spot and strike (homogeneity)."""
+        grid = SimpleNamespace(n_space=201, n_time=200, s_max=20000, theta=0.5)
+        big = OptionContract(option=OptionType.CALL, strike=10000, spot=10000, risk_free_rate=0.05,
+                             volatility=0.2, time_to_expiry=1.0, style=ExerciseStyle.EUROPEAN)
+        small = OptionContract(option=OptionType.CALL, strike=100, spot=100, risk_free_rate=0.05,
+                               volatility=0.2, time_to_expiry=1.0, style=ExerciseStyle.EUROPEAN)
+        small_grid = SimpleNamespace(n_space=201, n_time=200, s_max=200, theta=0.5)
+        big_price = PDEEngine(grid, default_solver_params).price(big).price
+        small_price = PDEEngine(small_grid, default_solver_params).price(small).price
+        assert big_price == pytest.approx(100 * small_price, rel=1e-9)
 
 
 # Performance and integration tests
