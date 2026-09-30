@@ -96,25 +96,30 @@ class DeltaHedging:
                 # Stock price evolution (geometric Brownian motion)
                 dW = rng.normal(0, np.sqrt(dt))
                 S[i] = S[i-1] * np.exp((self.r - 0.5 * self.sigma**2) * dt + self.sigma * dW)
-                
+
                 t = i * dt
-                
+
+                # Cash earns the risk-free rate over the step. Each rebalancing flow must accrue
+                # only from the time it happens, so grow the balance step by step rather than
+                # growing the running sum of all flows from t = 0.
+                cash_position *= np.exp(self.r * dt)
+
                 # Rehedge if necessary
                 if i % hedge_frequency == 0 or i == n_steps:
                     current_delta = self.calculate_delta(S[i], t)
                     required_stock = -option_position * current_delta
                     stock_trade = required_stock - stock_position
-                    
+
                     # Update positions
                     cash_position -= stock_trade * S[i]  # Cost of rebalancing
                     stock_position = required_stock
-                
-                # Calculate portfolio value
-                option_value = -option_position * self.black_scholes_price(S[i], t)
+
+                # Portfolio value: short option (a liability, so its value enters negatively),
+                # plus shares, plus cash
+                option_value = option_position * self.black_scholes_price(S[i], t)
                 stock_value = stock_position * S[i]
-                cash_value = cash_position * np.exp(self.r * t)  # Cash grows at risk-free rate
-                
-                total_portfolio_value = option_value + stock_value + cash_value
+
+                total_portfolio_value = option_value + stock_value + cash_position
                 portfolio_values.append(total_portfolio_value)
                 
                 # Hedging error (should be close to 0 for perfect hedge)

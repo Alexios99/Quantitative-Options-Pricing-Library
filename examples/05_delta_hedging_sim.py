@@ -97,20 +97,22 @@ def run_simulation():
             cash -= delta_change * new_spot
             
             option_price = engine.price(new_contract).price
+            liability = option_price
         else:
             # Expiry
             payoff = max(0.0, new_spot - K)
             option_price = payoff
-            
+
             # Close out position
             cash += shares * new_spot # Sell shares
             shares = 0
             cash -= payoff            # Pay out option holder
-            
+            liability = 0.0           # settled above; subtracting it again would double count
+
         option_prices.append(option_price)
-        
+
         # Portfolio Value = Cash + Shares*S - Option_Liability
-        pv = cash + shares * new_spot - option_price
+        pv = cash + shares * new_spot - liability
         portfolio_values.append(pv)
         
         current_contract = new_contract
