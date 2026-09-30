@@ -59,7 +59,7 @@ class DeltaHedging:
         else:
             return norm.cdf(d1) - 1
     
-    def simulate_hedging(self, n_steps=100, n_simulations=1000, hedge_frequency=1):
+    def simulate_hedging(self, n_steps=100, n_simulations=1000, hedge_frequency=1, seed=None):
         """
         Simulate delta hedging strategy
         
@@ -67,8 +67,10 @@ class DeltaHedging:
             n_steps: Number of time steps
             n_simulations: Number of simulation paths
             hedge_frequency: Rehedge every N steps
+            seed: Seed for the random number generator; the same seed reproduces the same paths
         """
         dt = self.T / n_steps
+        rng = np.random.default_rng(seed)
         results = []
         
         for sim in range(n_simulations):
@@ -92,7 +94,7 @@ class DeltaHedging:
             # Simulate stock path
             for i in range(1, n_steps + 1):
                 # Stock price evolution (geometric Brownian motion)
-                dW = np.random.normal(0, np.sqrt(dt))
+                dW = rng.normal(0, np.sqrt(dt))
                 S[i] = S[i-1] * np.exp((self.r - 0.5 * self.sigma**2) * dt + self.sigma * dW)
                 
                 t = i * dt
@@ -192,6 +194,7 @@ class DeltaHedging:
 
 # Example usage
 if __name__ == "__main__":
+    SEED = 42     # fixed so every run reproduces the same paths
     # Parameters
     S0 = 100      # Initial stock price
     K = 100       # Strike price
@@ -204,7 +207,7 @@ if __name__ == "__main__":
     
     # Run simulation
     print("Running delta hedging simulation...")
-    results = hedger.simulate_hedging(n_steps=50, n_simulations=1000, hedge_frequency=1)
+    results = hedger.simulate_hedging(n_steps=50, n_simulations=1000, hedge_frequency=1, seed=SEED)
     
     # Analyze results
     analysis = hedger.analyze_results(results)

@@ -16,6 +16,7 @@ def run_simulation():
     r = 0.05            # Risk-free rate
     sigma = 0.20        # Volatility
     n_steps = 1000      # Increased frequency (approx 4x daily) for better hedging
+    seed = 42           # fixed so every run reproduces the same path
     
     # Create initial contract
     contract = OptionContract(
@@ -31,7 +32,7 @@ def run_simulation():
     print("Simulating market path...")
     process = GeometricBrownianMotion(drift=r, volatility=sigma)
     # simulate_paths returns [n_paths, n_steps+1]
-    paths = process.simulate_paths(S0, T, n_paths=1, n_steps=n_steps, seed=None)
+    paths = process.simulate_paths(S0, T, n_paths=1, n_steps=n_steps, seed=seed)
     spot_path = paths[0]
     time_grid = np.linspace(0, T, n_steps + 1)
     dt = T / n_steps

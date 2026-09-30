@@ -38,7 +38,7 @@ A Python library for pricing equity options with several numerical methods and c
 *SABR fit to a synthetic volatility smile (`examples/03_sabr_calibration.py`).*
 
 ![Hedging Simulation](assets/hedging_simulation.png)
-*One simulated delta-hedging path (`examples/05_delta_hedging_sim.py`).*
+*One simulated delta-hedging path (`examples/05_delta_hedging_sim.py`, seed 42).*
 
 ## Installation
 
@@ -160,8 +160,8 @@ from quantlib.hedging.delta_hedging import DeltaHedging
 # Spot=100, Strike=100, 3 months, 20% vol
 hedger = DeltaHedging(S0=100, K=100, T=0.25, r=0.05, sigma=0.20)
 
-# 1,000 simulated paths, rebalanced at each of 50 steps
-results = hedger.simulate_hedging(n_steps=50, n_simulations=1000, hedge_frequency=1)
+# 1,000 simulated paths, rebalanced at each of 50 steps; fixed seed for reproducibility
+results = hedger.simulate_hedging(n_steps=50, n_simulations=1000, hedge_frequency=1, seed=42)
 analysis = hedger.analyze_results(results)
 
 print(f"Mean Hedging Error: {analysis['mean_hedging_error']:.4f}")
