@@ -24,10 +24,10 @@ class MonteCarloEngine(PricingEngine):
 
     def price(self, contract: OptionContract) -> MonteCarloPricingResult:
         payoffs = self._generate_payoffs(contract)
-        payoffs = self._generate_payoffs(contract)
         if contract.style == ExerciseStyle.EUROPEAN:
             discounted = payoffs * np.exp(-contract.risk_free_rate * contract.time_to_expiry)
-        else:  
+        else:
+            # Longstaff-Schwartz already returns cash flows discounted to t = 0
             discounted = payoffs
 
         mean_price, std_error, ci_half_width = self._calculate_statistics(discounted)
@@ -114,8 +114,8 @@ class MonteCarloEngine(PricingEngine):
         else:
             rho_put = (bumped_price - current_price) / 0.01
             rho_call = rho_put + contract.time_to_expiry * contract.strike * np.exp(-contract.risk_free_rate * contract.time_to_expiry)
-        
-        return rho_put, rho_call
+
+        return rho_call, rho_put
     
     def _calculate_gamma(self, contract: OptionContract, current_price) -> float:
         bumped_up = self.price(self._bump_contract(contract, "spot_up")).price
@@ -173,122 +173,129 @@ class MonteCarloEngine(PricingEngine):
         return payoffs
 
     def _generate_american_payoffs(self, contract: OptionContract) -> np.ndarray:
-        """American payoffs using Longstaff-Schwartz with full paths."""
+        """American payoffs by Longstaff-Schwartz, with the exercise policy fitted out of sample.
+
+        The regression that estimates continuation values is fitted on one set of paths and the
+        resulting exercise rule is applied to an independent set. Reusing the same paths lets
+        the policy peek at the future cash flows it is scored on, which biases the price upward;
+        an independent pricing set gives a low-biased estimate (any fixed policy is sub-optimal).
+        """
         vr = (self.variance_reduction or "none").lower()
-        
+        regression_seed, pricing_seed = self._lsm_seeds()
+
         if vr == "antithetic":
-            return self._american_antithetic_payoffs(contract)
-        else:
-            # Generate full paths (not just terminal!)
-            paths = self._generate_full_paths(contract)
-            payoffs = self._longstaff_schwartz_exercise(contract, paths)
-            
-            if vr == "control":
-                return self._apply_american_control_variates(contract, payoffs, paths)
-            
-            return payoffs
-        
-    def _generate_full_paths(self, contract: OptionContract) -> np.ndarray:
-        """Generate complete price paths for American options."""
+            regression_paths = np.vstack(self._generate_antithetic_full_paths(contract, regression_seed))
+            policy = self._lsm_fit_policy(contract, regression_paths)
+            paths1, paths2 = self._generate_antithetic_full_paths(contract, pricing_seed)
+            return 0.5 * (self._lsm_apply_policy(contract, paths1, policy)
+                          + self._lsm_apply_policy(contract, paths2, policy))
+
+        policy = self._lsm_fit_policy(contract, self._generate_full_paths(contract, regression_seed))
+        pricing_paths = self._generate_full_paths(contract, pricing_seed)
+        payoffs = self._lsm_apply_policy(contract, pricing_paths, policy)
+
+        if vr == "control":
+            return self._apply_american_control_variates(contract, payoffs, pricing_paths)
+        return payoffs
+
+    def _lsm_seeds(self) -> tuple:
+        """(regression seed, pricing seed).
+
+        Pricing paths use the engine seed, i.e. the same paths as the European price, so American
+        and European estimates share random numbers (the early-exercise premium is then far less
+        noisy). The regression paths use a separate seed derived from it, so the policy is fitted
+        out of sample. With seed=None both sets are drawn from fresh entropy.
+        """
+        if self.seed is None:
+            return None, None
+        regression = np.random.SeedSequence(self.seed).spawn(1)[0]
+        return int(regression.generate_state(1)[0]), self.seed
+
+    def _generate_full_paths(self, contract: OptionContract, seed: int | None) -> np.ndarray:
+        """Generate complete price paths [n_paths, n_steps + 1], including t = 0."""
         sp = GeometricBrownianMotion(drift=contract.risk_free_rate, volatility=contract.volatility)
-        paths = sp.simulate_paths(contract.spot, contract.time_to_expiry, self.n_paths, self.n_steps, self.seed) 
-        return  paths # Returns [n_paths, n_steps+1] including t=0
+        return sp.simulate_paths(contract.spot, contract.time_to_expiry, self.n_paths, self.n_steps, seed)
 
-    def _longstaff_schwartz_exercise(self, contract: OptionContract, paths: np.ndarray) -> np.ndarray:
-        n_paths, n_time_steps = paths.shape
-        dt = contract.time_to_expiry / self.n_steps
+    def _lsm_basis(self, spots: np.ndarray, strike: float) -> np.ndarray:
+        """Quadratic polynomial basis in moneyness S/K (scaling keeps the regression well conditioned)."""
+        x = spots / strike
+        return np.column_stack([np.ones_like(x), x, x ** 2])
 
-        option_values = np.zeros_like(paths)
-        option_values[:, -1] = self._payoff_from_terminal(contract, paths[:, -1])
+    def _lsm_fit_policy(self, contract: OptionContract, paths: np.ndarray) -> list:
+        """Regression coefficients for the continuation value at each exercise date t = 1..n-1.
 
-        for t in range(n_time_steps - 2, -1, -1):
-            current_spot_prices = paths[:, t]
-            
-            immediate_exercise_value = self._payoff_from_terminal(contract, current_spot_prices)
+        Entry t is None when too few paths are in the money to fit, meaning "do not exercise".
+        """
+        n_time_points = paths.shape[1]
+        df = np.exp(-contract.risk_free_rate * contract.time_to_expiry / self.n_steps)
+        policy = [None] * n_time_points
+        cash_flows = self._payoff_from_terminal(contract, paths[:, -1])
 
-            in_the_money = immediate_exercise_value > 0
-            if np.sum(in_the_money) < 2:
-                option_values[:, t] = np.exp(-contract.risk_free_rate * dt) *  option_values[:, t+1]
+        for t in range(n_time_points - 2, 0, -1):
+            cash_flows = cash_flows * df
+            exercise_value = self._payoff_from_terminal(contract, paths[:, t])
+            itm = exercise_value > 0
+            if np.sum(itm) < 3:
                 continue
+            basis = self._lsm_basis(paths[itm, t], contract.strike)
+            coefficients, _, _, _ = np.linalg.lstsq(basis, cash_flows[itm], rcond=None)
+            policy[t] = coefficients
+            exercise = exercise_value[itm] > basis @ coefficients
+            itm_idx = np.flatnonzero(itm)
+            cash_flows[itm_idx[exercise]] = exercise_value[itm_idx[exercise]]
+        return policy
 
-            itm_spots = current_spot_prices[in_the_money]
-            itm_future_values = option_values[in_the_money, t+1]
+    def _lsm_apply_policy(self, contract: OptionContract, paths: np.ndarray, policy: list) -> np.ndarray:
+        """Per-path cash flows discounted to t = 0 under a fixed exercise policy."""
+        n_time_points = paths.shape[1]
+        df = np.exp(-contract.risk_free_rate * contract.time_to_expiry / self.n_steps)
+        cash_flows = self._payoff_from_terminal(contract, paths[:, -1])
 
-            itm_discounted_future = itm_future_values * np.exp(-contract.risk_free_rate * dt)
+        for t in range(n_time_points - 2, 0, -1):
+            cash_flows = cash_flows * df
+            coefficients = policy[t]
+            if coefficients is None:
+                continue
+            exercise_value = self._payoff_from_terminal(contract, paths[:, t])
+            itm = exercise_value > 0
+            if not np.any(itm):
+                continue
+            continuation = self._lsm_basis(paths[itm, t], contract.strike) @ coefficients
+            exercise = exercise_value[itm] > continuation
+            itm_idx = np.flatnonzero(itm)
+            cash_flows[itm_idx[exercise]] = exercise_value[itm_idx[exercise]]
 
-            X = np.column_stack([np.ones_like(itm_spots), itm_spots, itm_spots**2,])
-            try:
-                coefficients, _, _, _ = np.linalg.lstsq(X, itm_discounted_future, rcond=None)
-                
-                # Predict continuation values for ALL ITM paths
-                continuation_values = X @ coefficients
-                
-            except np.linalg.LinAlgError:
-                continuation_values = itm_discounted_future
-           
-            exercise_decision = immediate_exercise_value[in_the_money] > continuation_values
-
-            option_values[in_the_money, t] = np.where(exercise_decision, immediate_exercise_value[in_the_money], itm_discounted_future)
-
-            otm_mask = ~in_the_money
-            option_values[otm_mask, t] = option_values[otm_mask, t+1] * np.exp(-contract.risk_free_rate * dt)
-
-        return option_values[:, 0]
+        cash_flows = cash_flows * df  # from t = 1 back to t = 0
+        # Exercise at t = 0 if the intrinsic value beats the estimated continuation value
+        intrinsic_now = float(self._payoff_from_terminal(contract, np.array([contract.spot]))[0])
+        if intrinsic_now > np.mean(cash_flows):
+            return np.full_like(cash_flows, intrinsic_now)
+        return cash_flows
 
     def _apply_american_control_variates(self, contract: OptionContract, payoffs: np.ndarray, paths: np.ndarray) -> np.ndarray:
-        """Apply control variates to American option payoffs (simplified approach)."""
-        # For now, use European option as control variate
+        """Control variate: the discounted European payoff on the same paths, with known mean E[X] = BS price.
+
+        Y_cv = Y - beta * (X - E[X]), beta = Cov(Y, X) / Var(X). The control must be computed on the
+        same paths as Y (so the two are correlated) and discounted to t = 0 (so E[X] is the BS price).
+        """
         european_contract = replace(contract, style=ExerciseStyle.EUROPEAN)
-        european_payoffs = self._generate_european_payoffs(european_contract)
-        
-        # Simple control: use correlation between American and European payoffs
-        if len(european_payoffs) != len(payoffs):
-            # Fallback: no control variate
-            return payoffs
-        
-        # Basic control variate implementation
-        var_control = np.var(european_payoffs, ddof=1)
+        discount = np.exp(-contract.risk_free_rate * contract.time_to_expiry)
+        control = discount * self._payoff_from_terminal(contract, paths[:, -1])
+        control_mean = BlackScholesEngine().price(european_contract).price
+
+        var_control = np.var(control, ddof=1)
         if var_control == 0.0:
             return payoffs
-        
-        cov = np.cov(payoffs, european_payoffs, ddof=1)[0, 1]
-        beta = cov / var_control
-        
-        # Known value for European option (use Black-Scholes)
-        bs_engine = BlackScholesEngine()
-        european_expected = bs_engine.price(european_contract).price
-        
-        return payoffs + beta * (european_payoffs - european_expected)    
+        beta = np.cov(payoffs, control, ddof=1)[0, 1] / var_control
+        return payoffs - beta * (control - control_mean)
 
-    def _american_antithetic_payoffs(self, contract: OptionContract) -> np.ndarray:
-        """American payoffs using antithetic variates with Longstaff-Schwartz."""
-        # Generate antithetic path pairs
-        paths1, paths2 = self._generate_antithetic_full_paths(contract)
-        
-        # Apply LS to both sets
-        payoffs1 = self._longstaff_schwartz_exercise(contract, paths1)
-        payoffs2 = self._longstaff_schwartz_exercise(contract, paths2)
-        
-        # Return average
-        return 0.5 * (payoffs1 + payoffs2)
-    
-    def _generate_antithetic_full_paths(self, contract: OptionContract) -> tuple[np.ndarray, np.ndarray]:
-        """Generate paired antithetic full paths for American options."""
+    def _generate_antithetic_full_paths(self, contract: OptionContract, seed: int | None) -> tuple[np.ndarray, np.ndarray]:
+        """n_paths // 2 antithetic pairs of full paths (Z and -Z)."""
         half_paths = self.n_paths // 2
-        
-        # Generate random numbers for half the paths
-        rng = np.random.default_rng(self.seed)
+        rng = np.random.default_rng(seed)
         Z = rng.normal(size=(half_paths, self.n_steps))
-        
         paths1 = self._simulate_gbm_full_paths_with_randoms(contract, Z)
         paths2 = self._simulate_gbm_full_paths_with_randoms(contract, -Z)
-        
-        # Handle odd n_paths by concatenating one extra path
-        if 2 * half_paths < self.n_paths:
-            extra_Z = rng.normal(size=(1, self.n_steps))
-            extra_path = self._simulate_gbm_full_paths_with_randoms(contract, extra_Z)
-            paths1 = np.vstack([paths1, extra_path])
-        
         return paths1, paths2
 
 

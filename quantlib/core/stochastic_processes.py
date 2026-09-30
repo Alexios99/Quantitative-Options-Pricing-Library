@@ -16,7 +16,7 @@ class GeometricBrownianMotion(StochasticProcess):
         self.volatility = volatility
     
     def simulate_paths(self, S0, T, n_paths, n_steps, seed=None):
-        if seed:
+        if seed is not None:
             Z = norm.rvs(size=(n_paths, n_steps), random_state=seed)
         else:
             Z = norm.rvs(size=(n_paths, n_steps))

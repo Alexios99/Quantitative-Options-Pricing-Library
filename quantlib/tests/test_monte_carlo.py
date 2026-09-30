@@ -681,5 +681,79 @@ class TestMonteCarloEngine:
             # Expected until American Greeks are implemented
             pass
 
+
+class TestMonteCarloFixes:
+    """Regression tests for the rho ordering, American control variate and out-of-sample LSM."""
+
+    @pytest.fixture
+    def call(self):
+        return OptionContract(100.0, 100.0, 1.0, 0.05, 0.2, OptionType.CALL, ExerciseStyle.EUROPEAN)
+
+    @pytest.fixture
+    def american_put(self):
+        return OptionContract(100.0, 100.0, 1.0, 0.05, 0.2, OptionType.PUT, ExerciseStyle.AMERICAN)
+
+    @pytest.mark.parametrize("option", [OptionType.CALL, OptionType.PUT])
+    def test_rho_matches_black_scholes(self, option):
+        contract = OptionContract(100.0, 100.0, 1.0, 0.05, 0.2, option, ExerciseStyle.EUROPEAN)
+        mc = MonteCarloEngine(n_steps=50, n_paths=50000, seed=1).greeks(contract)
+        bs = BlackScholesEngine().greeks(contract)
+        # A +1% rate bump with common random numbers: forward-difference bias is ~0.6 here
+        assert mc.rho_call == pytest.approx(bs.rho_call, abs=1.5)
+        assert mc.rho_put == pytest.approx(bs.rho_put, abs=1.5)
+        assert mc.rho_call > 0 > mc.rho_put
+
+    def test_american_control_variate_reduces_standard_error_without_shifting_price(self, american_put):
+        se_plain, se_ctrl, price_diffs = [], [], []
+        for seed in range(5):
+            plain = MonteCarloEngine(n_steps=50, n_paths=20000, seed=seed).price(american_put)
+            ctrl = MonteCarloEngine(n_steps=50, n_paths=20000, variance_reduction="control", seed=seed).price(american_put)
+            se_plain.append(plain.standard_error)
+            se_ctrl.append(ctrl.standard_error)
+            price_diffs.append(ctrl.price - plain.price)
+        assert np.mean(se_ctrl) < 0.8 * np.mean(se_plain)
+        # Same pricing paths: the control shifts the estimate by noise only, not by a bias
+        assert abs(np.mean(price_diffs)) < 2 * np.mean(se_plain)
+
+    def test_lsm_policy_is_fitted_on_independent_paths(self, american_put, monkeypatch):
+        engine = MonteCarloEngine(n_steps=20, n_paths=2000, seed=3)
+        seen = {}
+        fit, apply = engine._lsm_fit_policy, engine._lsm_apply_policy
+
+        def spy_fit(contract, paths):
+            seen["fit"] = paths
+            return fit(contract, paths)
+
+        def spy_apply(contract, paths, policy):
+            seen["apply"] = paths
+            return apply(contract, paths, policy)
+
+        monkeypatch.setattr(engine, "_lsm_fit_policy", spy_fit)
+        monkeypatch.setattr(engine, "_lsm_apply_policy", spy_apply)
+        engine.price(american_put)
+        assert seen["fit"].shape == seen["apply"].shape
+        assert not np.allclose(seen["fit"][:, 1:], seen["apply"][:, 1:])
+
+    def test_out_of_sample_lsm_is_not_above_tree_price(self, american_put):
+        from quantlib.pricing.trees import BinomialTreeEngine
+        reference = BinomialTreeEngine(1000).price(american_put).price
+        results = [MonteCarloEngine(n_steps=50, n_paths=20000, seed=s).price(american_put) for s in range(5)]
+        mean_price = np.mean([r.price for r in results])
+        se_of_mean = np.mean([r.standard_error for r in results]) / np.sqrt(len(results))
+        european = BlackScholesEngine().price(replace(american_put, style=ExerciseStyle.EUROPEAN)).price
+        # Low-biased estimator: must not exceed the lattice price beyond noise, and must beat European
+        assert mean_price < reference + 3 * se_of_mean
+        assert mean_price > european
+
+    def test_seed_zero_is_reproducible(self, call):
+        a = MonteCarloEngine(n_steps=10, n_paths=1000, seed=0).price(call)
+        b = MonteCarloEngine(n_steps=10, n_paths=1000, seed=0).price(call)
+        assert a.price == b.price
+
+    def test_odd_path_count_antithetic_american(self, american_put):
+        result = MonteCarloEngine(n_steps=10, n_paths=1001, variance_reduction="antithetic", seed=2).price(american_put)
+        assert np.isfinite(result.price)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
